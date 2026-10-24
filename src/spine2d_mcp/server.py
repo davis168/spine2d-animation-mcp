@@ -8,6 +8,9 @@ from mcp.server.fastmcp import FastMCP
 
 from .edits import edit_skeleton, report
 from .ops import animation as anim_ops
+from .ops import attachments as att_ops
+from .ops import constraints as con_ops
+from .ops import rig as rig_ops
 from .pipeline import import_psd_to_spine as _import
 from .spine import document as d
 from .spine.check import check, summary
@@ -152,6 +155,156 @@ def remove_animation(project_path: str, name: str, out_path: str | None = None) 
         out_path: Write to this path instead of editing in place.
     """
     return edit_skeleton(project_path, lambda doc: anim_ops.remove_animation(doc, name), out_path)
+
+
+@mcp.tool()
+def edit_rig(project_path: str, operations: list[dict], out_path: str | None = None) -> dict:
+    """Edit the setup pose: a list of operations applied in order, written
+    only if the result is still a valid 4.2 skeleton.
+
+    Operations ("op" plus its fields; x/y in skeleton units, y up, degrees CCW):
+    - add_bone: name, parent, x, y [, rotation, scaleX, scaleY, shearX, shearY,
+      length, inherit, color, world=true to give x/y in world space]
+    - set_bone: name [, parent (keeps the world position), x, y, rotation, ...]
+    - move_pivot: name, x, y (world-space delta) or to=[x, y] (world point);
+      the bone's art, children and weighted vertices stay where they are
+    - rename_bone: name, to (updates slots, constraints, animations)
+    - remove_bone: name (only if no children, slots or constraints use it)
+    - add_slot: name, bone [, attachment, index, color, dark, blend]
+    - set_slot: name [, bone (keeps attachments in place), attachment, color,
+      dark, blend]
+    - remove_slot: name
+    - set_draw_order: order=[every slot, back to front] or slot + index
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        operations: e.g. [{"op": "move_pivot", "name": "arm_left", "x": 0, "y": -20}].
+        out_path: Write to this path instead of editing in place.
+    """
+    return edit_skeleton(project_path, lambda doc: rig_ops.edit_rig(doc, operations), out_path)
+
+
+@mcp.tool()
+def add_constraint(
+    project_path: str,
+    type: str,
+    name: str,
+    bones: list[str] | None = None,
+    bone: str | None = None,
+    target: str | None = None,
+    target_at: str | list[float] | None = None,
+    target_parent: str | None = None,
+    preset: str | None = None,
+    params: dict | None = None,
+    order: int | None = None,
+    replace: bool = False,
+    out_path: str | None = None,
+) -> dict:
+    """Add an IK, transform or physics constraint (Spine 4.2).
+
+    - ik: bones (1 or 2, parent then child), target bone; params mix,
+      softness, bendPositive, compress, stretch, uniform. IK aims the first
+      bone's x axis at the target, so it suits bones that point along their
+      limbs; the result warns when the setup pose would swing.
+    - transform: bones, target; params rotation, x, y, scaleX, scaleY, shearY
+      (offsets), mixRotate, mixX, mixY, mixScaleX, mixScaleY, mixShearY, local,
+      relative.
+    - physics: bone; preset hair, cloth, tail, antenna or jiggle, and/or params
+      x, y, rotate, scaleX, shearX (0..1: what it moves), inertia, strength,
+      damping, mass, wind, gravity, mix, limit, fps.
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        type: ik, transform or physics.
+        name: Constraint name.
+        bones: Constrained bones (ik, transform).
+        bone: Simulated bone (physics).
+        target: Target bone (ik, transform). Created if missing and target_at is given.
+        target_at: Where to create a missing target: a bone name (its world
+            position) or [x, y] world point.
+        target_parent: Parent for a created target (default: the root bone).
+        preset: Physics preset name.
+        params: Other fields, as listed above.
+        order: Apply order among all constraints (default: last).
+        replace: Replace a constraint of the same name, keeping its timelines.
+        out_path: Write to this path instead of editing in place.
+    """
+    return edit_skeleton(
+        project_path,
+        lambda doc: con_ops.add_constraint(
+            doc, type, name, bones, bone, target, target_at, target_parent, preset, order, replace,
+            **(params or {}),
+        ),
+        out_path,
+    )
+
+
+@mcp.tool()
+def remove_constraint(project_path: str, name: str, out_path: str | None = None) -> dict:
+    """Remove a constraint by name, with its skin entries and animation timelines.
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        name: Constraint to remove.
+        out_path: Write to this path instead of editing in place.
+    """
+    return edit_skeleton(project_path, lambda doc: con_ops.remove_constraint(doc, name), out_path)
+
+
+@mcp.tool()
+def add_attachment(
+    project_path: str,
+    slot: str,
+    image_path: str,
+    name: str | None = None,
+    skin: str = "default",
+    x: float = 0.0,
+    y: float = 0.0,
+    rotation: float = 0.0,
+    world: bool = False,
+    set_as_setup: bool = False,
+    replace: bool = False,
+    atlas_path: str | None = None,
+) -> dict:
+    """Add a PNG as a region attachment on a slot (e.g. a mouth shape or an
+    alternate hand to swap with an attachment timeline), copy it into the
+    skeleton's images folder and repack the atlas.
+
+    Args:
+        project_path: Absolute path to the skeleton .json (edited in place).
+        slot: Slot to attach to (add one first with edit_rig add_slot if needed).
+        image_path: Absolute path to the PNG.
+        name: Attachment name; default the PNG's file name without extension.
+        skin: Skin to add it to (created if missing).
+        x, y, rotation: Image centre and angle relative to the slot's bone, or
+            world-space with world=true.
+        set_as_setup: Show it in the setup pose (sets the slot's attachment).
+        replace: Overwrite an attachment of the same name.
+        atlas_path: Atlas to rewrite; default <skeleton>.atlas next to the JSON.
+    """
+    size = att_ops.image_size(image_path)
+    name = name or Path(image_path).stem
+    result = edit_skeleton(
+        project_path,
+        lambda doc: att_ops.add_region(doc, slot, name, size, skin, x, y, rotation,
+                                       world=world, set_as_setup=set_as_setup, replace=replace),
+    )
+    doc = d.load(project_path)
+    result["image"] = str(att_ops.copy_image(image_path, att_ops.images_dir(project_path, doc), name))
+    result["atlas"] = att_ops.repack(project_path, atlas_path)
+    return result
+
+
+@mcp.tool()
+def pack_atlas(project_path: str, atlas_path: str | None = None) -> dict:
+    """Repack the atlas from the skeleton's images folder (one PNG per
+    attachment path), e.g. after editing part images.
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        atlas_path: Atlas to write; default <skeleton>.atlas next to the JSON.
+    """
+    return att_ops.repack(project_path, atlas_path)
 
 
 def main() -> None:
