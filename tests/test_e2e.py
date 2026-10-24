@@ -52,9 +52,22 @@ def test_atlas_png_has_content(synthetic_psd, tmp_path):
     assert page.getextrema()[3][1] > 0
 
 
+def test_pipeline_writes_part_images_for_editor(synthetic_psd, tmp_path):
+    """The Spine editor displays individual part images (not the atlas), so
+    each attachment is also written to images/ and the skeleton points there."""
+    result = import_psd_to_spine(synthetic_psd, str(tmp_path / "out"))
+    data = json.loads(result.project_path.read_text())
+    assert data["skeleton"]["images"] == "./images/"
+    assert result.images_dir == result.project_path.parent / "images"
+    written = {p.stem for p in result.images_dir.glob("*.png")}
+    assert written == set(data["skins"][0]["attachments"])
+    with Image.open(result.images_dir / "head.png") as head:
+        assert head.size == (80, 80)
+
+
 def test_mcp_tool_wrapper(synthetic_psd, tmp_path):
     from spine2d_mcp.server import import_psd_to_spine as tool
 
     res = tool(synthetic_psd, str(tmp_path / "out"))
-    assert set(res) == {"project_path", "atlas_path", "png_paths"}
+    assert set(res) == {"project_path", "atlas_path", "png_paths", "images_dir"}
     assert res["project_path"].endswith(".json")

@@ -14,6 +14,7 @@ Notable 4.2 specifics:
 - Rotate animation keyframes use `angle`, not `rotation` (handled in the
   animation models, added in Phase 1).
 - Region attachment `width`/`height` are read without a default → required.
+- Skin `name` is read without a default → required (even for "default").
 """
 
 from __future__ import annotations
@@ -115,7 +116,9 @@ SkinAttachments = dict[str, dict[str, RegionAttachment]]
 
 
 class Skin(_SpineModel):
-    name: str = "default"
+    # Required, with no default: the reader reads `name` without a default, and
+    # a "default" default would be dropped by exclude_defaults on serialization.
+    name: str
     attachments: SkinAttachments = Field(default_factory=dict)
 
 

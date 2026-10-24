@@ -39,7 +39,7 @@ def test_region_attachment_required_dims():
     att = RegionAttachment(width=64.0, height=128.0)
     proj = SpineProject(
         slots=[Slot(name="head", bone="head", attachment="head")],
-        skins=[Skin(attachments={"head": {"head": att}})],
+        skins=[Skin(name="default", attachments={"head": {"head": att}})],
     )
     out = to_dict(proj)
     region = out["skins"][0]["attachments"]["head"]["head"]
@@ -54,6 +54,14 @@ def test_ik_constraint_has_order():
     assert out["name"] == "leg_ik"
     assert out["bones"] == ["thigh", "shin"]
     assert out["target"] == "foot"
+
+
+def test_skin_name_always_emitted():
+    """The reader requires the skin `name` (no default), so the "default" skin
+    must keep it — exclude_defaults stripped it and the editor rejected the
+    file with "Named value not found: name"."""
+    proj = SpineProject(skins=[Skin(name="default")])
+    assert to_dict(proj)["skins"] == [{"name": "default"}]
 
 
 def test_skeleton_version_present():
