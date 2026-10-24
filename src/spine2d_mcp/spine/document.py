@@ -46,8 +46,13 @@ def save(doc: dict, path: str | Path) -> Path:
     return path
 
 
+def _dicts(value) -> list[dict]:
+    """Entries of a list that are objects; malformed ones are the checker's to report."""
+    return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
+
+
 def bones(doc: dict) -> list[dict]:
-    return doc.get("bones") or []
+    return _dicts(doc.get("bones"))
 
 
 def bone_map(doc: dict) -> dict[str, dict]:
@@ -55,7 +60,7 @@ def bone_map(doc: dict) -> dict[str, dict]:
 
 
 def slots(doc: dict) -> list[dict]:
-    return doc.get("slots") or []
+    return _dicts(doc.get("slots"))
 
 
 def slot_map(doc: dict) -> dict[str, dict]:
@@ -63,8 +68,7 @@ def slot_map(doc: dict) -> dict[str, dict]:
 
 
 def skins(doc: dict) -> list[dict]:
-    value = doc.get("skins") or []
-    return value if isinstance(value, list) else []
+    return _dicts(doc.get("skins"))
 
 
 def find_skin(doc: dict, name: str) -> dict | None:
@@ -75,12 +79,15 @@ def attachment_names(doc: dict, slot: str) -> set[str]:
     """Every attachment name any skin defines for the slot."""
     names: set[str] = set()
     for skin in skins(doc):
-        names.update((skin.get("attachments") or {}).get(slot, {}) or {})
+        atts = skin.get("attachments")
+        named = atts.get(slot) if isinstance(atts, dict) else None
+        if isinstance(named, dict):
+            names.update(named)
     return names
 
 
 def constraints(doc: dict, kind: str) -> list[dict]:
-    return doc.get(kind) or []
+    return _dicts(doc.get(kind))
 
 
 def all_constraints(doc: dict) -> list[tuple[str, dict]]:
@@ -100,15 +107,21 @@ def animation_duration(animation: dict) -> float:
                     if isinstance(t, (int, float)):
                         latest = max(latest, float(t))
 
-    for group in ("bones", "slots", "ik", "transform", "path", "physics"):
-        for timelines in (animation.get(group) or {}).values():
-            if isinstance(timelines, dict):
-                for keys in timelines.values():
-                    keys_time(keys)
-    for skin in (animation.get("attachments") or {}).values():
-        for slot in (skin or {}).values():
-            for att in (slot or {}).values():
-                for keys in (att or {}).values():
+    def values(obj) -> list:
+        return list(obj.values()) if isinstance(obj, dict) else []
+
+    # bones/slots/path/physics: name -> {timeline: keys}; ik/transform: name -> keys.
+    for group in ("bones", "slots", "path", "physics"):
+        for timelines in values(animation.get(group)):
+            for keys in values(timelines):
+                keys_time(keys)
+    for group in ("ik", "transform"):
+        for keys in values(animation.get(group)):
+            keys_time(keys)
+    for skin in values(animation.get("attachments")):
+        for slot in values(skin):
+            for att in values(slot):
+                for keys in values(att):
                     keys_time(keys)
     keys_time(animation.get("drawOrder"))
     keys_time(animation.get("events"))
@@ -145,6 +158,42 @@ def local_matrix(bone: dict) -> tuple[float, float, float, float]:
     rx = math.radians(rotation + shx)
     ry = math.radians(rotation + 90 + shy)
     return math.cos(rx) * sx, math.cos(ry) * sy, math.sin(rx) * sx, math.sin(ry) * sy
+
+
+Matrix = tuple[float, float, float, float]  # (a, b, c, d): x' = a*x + b*y, y' = c*x + d*y
+
+
+def mat_mul(p: Matrix, q: Matrix) -> Matrix:
+    a, b, c, dd = p
+    e, f, g, h = q
+    return a * e + b * g, a * f + b * h, c * e + dd * g, c * f + dd * h
+
+
+def mat_inv(m: Matrix) -> Matrix:
+    a, b, c, dd = m
+    det = a * dd - b * c
+    if abs(det) < 1e-12:
+        raise ValueError("a bone has zero scale: its transform cannot be inverted")
+    return dd / det, -b / det, -c / det, a / det
+
+
+def decompose(m: Matrix) -> dict[str, float]:
+    """Spine local fields (rotation, scaleX, scaleY, shearY; shearX = 0) whose
+    `local_matrix` equals `m`, including reflections (negative scaleY)."""
+    a, b, c, dd = m
+    rotation = math.degrees(math.atan2(c, a))
+    sign = 1.0 if a * dd - b * c >= 0 else -1.0
+    y_angle = math.degrees(math.atan2(sign * dd, sign * b))
+    return {
+        "rotation": rotation,
+        "scaleX": math.hypot(a, c),
+        "scaleY": sign * math.hypot(b, dd),
+        "shearY": (y_angle - rotation - 90 + 180) % 360 - 180,
+    }
+
+
+def matrix(t: Affine) -> Matrix:
+    return t.a, t.b, t.c, t.d
 
 
 def world_transforms(doc: dict) -> dict[str, Affine]:

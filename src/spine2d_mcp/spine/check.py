@@ -109,6 +109,9 @@ class _Checker:
             return
         for i, bone in enumerate(bones):
             path = f"bones[{i}]"
+            if not isinstance(bone, dict):
+                self.error(path, "not a bone object")
+                continue
             name = bone.get("name")
             if not isinstance(name, str):
                 self.error(path, "bone without a name")
@@ -130,7 +133,20 @@ class _Checker:
                     self.error(f"{path}.{key}", "not a number")
             self.bone_names.add(name)
 
+    def _entries(self, key: str) -> None:
+        """Report a top-level array that is not a list, or holds non-objects."""
+        value = self.doc.get(key)
+        if value is None:
+            return
+        if not isinstance(value, list):
+            self.error(key, "must be a list")
+            return
+        for i, entry in enumerate(value):
+            if not isinstance(entry, dict):
+                self.error(f"{key}[{i}]", "not an object")
+
     def slots(self) -> None:
+        self._entries("slots")
         for i, slot in enumerate(d.slots(self.doc)):
             name = slot.get("name")
             path = f"slots[{name if isinstance(name, str) else i}]"
@@ -144,12 +160,14 @@ class _Checker:
                 self.error(path, f"bone {slot.get('bone')!r} not found")
             if slot.get("blend", "normal") not in BLEND_MODES:
                 self.error(path, f"unknown blend {slot.get('blend')!r}")
-            self.color(f"{path}.color", slot.get("color"), 8)
-            self.color(f"{path}.dark", slot.get("dark"), 6)
+            # Static colours go through Color.valueOf: 6 digits, or 8 with alpha.
+            self.color(f"{path}.color", slot.get("color"), (6, 8))
+            self.color(f"{path}.dark", slot.get("dark"), (6, 8))
 
     def constraint_defs(self) -> None:
         orders: dict[int, str] = {}
         for kind in d.CONSTRAINT_KINDS:
+            self._entries(kind)
             for i, c in enumerate(d.constraints(self.doc, kind)):
                 name = c.get("name")
                 path = f"{kind}[{name if isinstance(name, str) else i}]"
@@ -172,8 +190,8 @@ class _Checker:
                     if c.get("bone") not in self.bone_names:
                         self.error(path, f"bone {c.get('bone')!r} not found")
                     fps = c.get("fps", 60)
-                    if not isinstance(fps, int) or fps <= 0:
-                        self.error(f"{path}.fps", "must be a positive integer")
+                    if not _num(fps) or fps <= 0 or fps != int(fps):
+                        self.error(f"{path}.fps", "must be a positive whole number")
                     continue
                 members = c.get("bones") or []
                 if not members:
@@ -205,6 +223,9 @@ class _Checker:
             return
         slot_set = set(self.slot_names)
         for i, skin in enumerate(skins):
+            if not isinstance(skin, dict):
+                self.error(f"skins[{i}]", "not a skin object")
+                continue
             name = skin.get("name")
             path = f"skins[{name if isinstance(name, str) else i}]"
             if not isinstance(name, str):
@@ -220,12 +241,23 @@ class _Checker:
                 for c in skin.get(kind) or []:
                     if c not in self.constraint_names[kind]:
                         self.error(f"{path}.{kind}", f"{kind} constraint {c!r} not found")
-            for slot, atts in (skin.get("attachments") or {}).items():
+            attachments = skin.get("attachments") or {}
+            if not isinstance(attachments, dict):
+                self.error(f"{path}.attachments", "must map slot names to attachments")
+                continue
+            for slot, atts in attachments.items():
                 if slot not in slot_set:
                     self.error(f"{path}.attachments", f"slot {slot!r} not found")
                     continue
-                for att_name, att in (atts or {}).items():
-                    self.attachment(f"{path}.attachments.{slot}.{att_name}", skin, slot, att)
+                if not isinstance(atts, dict):
+                    self.error(f"{path}.attachments.{slot}", "must map attachment names to attachments")
+                    continue
+                for att_name, att in atts.items():
+                    apath = f"{path}.attachments.{slot}.{att_name}"
+                    if not isinstance(att, dict):
+                        self.error(apath, "not an attachment object")
+                        continue
+                    self.attachment(apath, skin, slot, att)
         if skins and "default" not in self.skin_names:
             self.warn("skins", "no 'default' skin: slots show nothing until a skin is set at runtime")
 
@@ -238,7 +270,7 @@ class _Checker:
             for key in ("width", "height"):
                 if not _num(att.get(key)):
                     self.error(path, f"region needs a numeric {key} (the reader has no default)")
-            self.color(f"{path}.color", att.get("color"), 8)
+            self.color(f"{path}.color", att.get("color"), (6, 8))
         elif kind == "mesh":
             self.mesh(path, att)
         elif kind == "linkedmesh":
@@ -255,6 +287,12 @@ class _Checker:
             self.vertices(path, att, att.get("vertexCount"))
         elif kind in ("boundingbox", "path"):
             self.vertices(path, att, att.get("vertexCount"))
+            if kind == "path":
+                lengths, count = att.get("lengths"), att.get("vertexCount")
+                if not isinstance(lengths, list):
+                    self.error(path, "path needs a lengths array (the reader requires it)")
+                elif isinstance(count, int) and len(lengths) != count // 3:
+                    self.error(path, f"lengths has {len(lengths)} entries, expected vertexCount / 3 = {count // 3}")
 
     def mesh(self, path: str, att: dict) -> None:
         uvs, triangles = att.get("uvs"), att.get("triangles")
@@ -315,9 +353,21 @@ class _Checker:
         if not isinstance(events, dict):
             self.error("events", "must map event names to their defaults")
             return
+        for name, value in events.items():
+            if not isinstance(value, dict):
+                self.error(f"events.{name}", "must be an object of defaults ({} for none)")
         self.event_names = set(events)
 
     # ── animations ───────────────────────────────────────────────────────────
+
+    def _obj(self, path: str, value) -> dict | None:
+        """The value if it is an object; otherwise report it and return None."""
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            self.error(path, "must be an object")
+            return None
+        return value
 
     def animations(self) -> None:
         animations = self.doc.get("animations") or {}
@@ -327,82 +377,91 @@ class _Checker:
         for name in self.loops - set(animations):
             self.error(f"animations.{name}", "named as a loop but does not exist")
         for name, anim in animations.items():
-            self.animation(f"animations.{name}", name, anim or {})
+            anim = self._obj(f"animations.{name}", anim)
+            if anim is not None:
+                self.animation(f"animations.{name}", name, anim)
+
+    def _groups(self, path: str, anim: dict, group: str):
+        """(name, timelines-object, path) for each entry of a name -> {timeline: keys} group."""
+        entries = self._obj(f"{path}.{group}", anim.get(group))
+        for name, timelines in (entries or {}).items():
+            tpath = f"{path}.{group}.{name}"
+            timelines = self._obj(tpath, timelines)
+            if timelines is not None:
+                yield name, timelines, tpath
 
     def animation(self, path: str, name: str, anim: dict) -> None:
         duration = d.animation_duration(anim)
         loop = name in self.loops
-        for bone, timelines in (anim.get("bones") or {}).items():
-            bpath = f"{path}.bones.{bone}"
+        for bone, timelines, bpath in self._groups(path, anim, "bones"):
             if bone not in self.bone_names:
                 self.error(bpath, "bone not found")
                 continue
-            for tname, keys in (timelines or {}).items():
+            for tname, keys in timelines.items():
                 tpath = f"{bpath}.{tname}"
                 if tname == "inherit":
-                    self.keys(tpath, keys)
-                    for k in keys or []:
-                        if k.get("inherit", "normal") not in INHERIT_MODES:
-                            self.error(tpath, f"unknown inherit {k.get('inherit')!r}")
+                    if self.keys(tpath, keys):
+                        for k in keys:
+                            if k.get("inherit", "normal") not in INHERIT_MODES:
+                                self.error(tpath, f"unknown inherit {k.get('inherit')!r}")
                     continue
                 if tname not in BONE_TIMELINES:
                     self.error(tpath, f"unknown bone timeline (have {', '.join(BONE_TIMELINES)})")
                     continue
                 fields, default = BONE_TIMELINES[tname]
-                if fields == ("value",):
-                    for i, k in enumerate(keys or []):
-                        if "angle" in k:
+                if fields == ("value",) and isinstance(keys, list):
+                    for i, k in enumerate(keys):
+                        if isinstance(k, dict) and "angle" in k:
                             self.error(f"{tpath}[{i}]", "'angle' is the 3.x key: 4.2 reads 'value' and treats this key as 0")
                 self.curve_keys(tpath, keys, fields, default, duration, loop)
-        for slot, timelines in (anim.get("slots") or {}).items():
-            spath = f"{path}.slots.{slot}"
+        for slot, timelines, spath in self._groups(path, anim, "slots"):
             if slot not in self.slot_names:
                 self.error(spath, "slot not found")
                 continue
-            for tname, keys in (timelines or {}).items():
+            for tname, keys in timelines.items():
                 tpath = f"{spath}.{tname}"
                 if tname == "attachment":
-                    self.keys(tpath, keys)
-                    names = d.attachment_names(self.doc, slot)
-                    for i, k in enumerate(keys or []):
-                        if k.get("name") is not None and k["name"] not in names:
-                            self.error(f"{tpath}[{i}]", f"attachment {k['name']!r} is in no skin for this slot")
+                    if self.keys(tpath, keys):
+                        names = d.attachment_names(self.doc, slot)
+                        for i, k in enumerate(keys):
+                            if k.get("name") is not None and k["name"] not in names:
+                                self.error(f"{tpath}[{i}]", f"attachment {k['name']!r} is in no skin for this slot")
                 elif tname == "alpha":
                     self.curve_keys(tpath, keys, ("value",), 0.0, duration, loop)
                 elif tname in SLOT_COLOR_TIMELINES:
+                    if not self.keys(tpath, keys):
+                        continue
                     colors, channels = SLOT_COLOR_TIMELINES[tname]
-                    for i, k in enumerate(keys or []):
+                    for i, k in enumerate(keys):
                         for field, length in colors:
                             if field not in k:
                                 self.error(f"{tpath}[{i}]", f"needs {field!r} (no default)")
                             else:
-                                self.color(f"{tpath}[{i}].{field}", k[field], length)
+                                self.color(f"{tpath}[{i}].{field}", k[field], (length,))
                     self.curve_shape(tpath, keys, channels)
                 else:
                     self.error(tpath, "unknown slot timeline (have attachment, rgba, rgb, alpha, rgba2, rgb2)")
         for kind, shapes in (("ik", 2), ("transform", 6)):
-            for cname, keys in (anim.get(kind) or {}).items():
+            group = self._obj(f"{path}.{kind}", anim.get(kind))
+            for cname, keys in (group or {}).items():
                 cpath = f"{path}.{kind}.{cname}"
                 if cname not in self.constraint_names[kind]:
                     self.error(cpath, f"{kind} constraint not found")
                     continue
-                self.keys(cpath, keys)
-                self.curve_shape(cpath, keys, shapes)
-        for cname, timelines in (anim.get("path") or {}).items():
-            cpath = f"{path}.path.{cname}"
+                if self.keys(cpath, keys):
+                    self.curve_shape(cpath, keys, shapes)
+        for cname, timelines, cpath in self._groups(path, anim, "path"):
             if cname not in self.constraint_names["path"]:
                 self.error(cpath, "path constraint not found")
                 continue
-            for tname, keys in (timelines or {}).items():
-                if tname in PATH_TIMELINES:
-                    self.keys(f"{cpath}.{tname}", keys)
+            for tname, keys in timelines.items():
+                if tname in PATH_TIMELINES and self.keys(f"{cpath}.{tname}", keys):
                     self.curve_shape(f"{cpath}.{tname}", keys, PATH_TIMELINES[tname])
-        for cname, timelines in (anim.get("physics") or {}).items():
-            cpath = f"{path}.physics.{cname or '(all)'}"
+        for cname, timelines, cpath in self._groups(path, anim, "physics"):
             if cname and cname not in self.constraint_names["physics"]:
                 self.error(cpath, "physics constraint not found")
                 continue
-            for tname, keys in (timelines or {}).items():
+            for tname, keys in timelines.items():
                 if tname == "reset":
                     self.keys(f"{cpath}.reset", keys)
                 elif tname in PHYSICS_TIMELINES:
@@ -412,51 +471,69 @@ class _Checker:
         self.deforms(path, anim)
         self.draw_order(path, anim.get("drawOrder"))
         events = anim.get("events")
-        if events is not None:
-            self.keys(f"{path}.events", events)
+        if events is not None and self.keys(f"{path}.events", events):
             for i, k in enumerate(events):
                 if k.get("name") not in self.event_names:
                     self.error(f"{path}.events[{i}]", f"event {k.get('name')!r} not defined in the root 'events'")
 
     def deforms(self, path: str, anim: dict) -> None:
-        for skin_name, slots in (anim.get("attachments") or {}).items():
+        skins = self._obj(f"{path}.attachments", anim.get("attachments"))
+        for skin_name, slots in (skins or {}).items():
+            spath = f"{path}.attachments.{skin_name}"
             skin = d.find_skin(self.doc, skin_name)
             if skin is None:
-                self.error(f"{path}.attachments.{skin_name}", "skin not found")
+                self.error(spath, "skin not found")
                 continue
-            for slot, atts in (slots or {}).items():
-                for att_name, timelines in (atts or {}).items():
-                    apath = f"{path}.attachments.{skin_name}.{slot}.{att_name}"
-                    att = ((skin.get("attachments") or {}).get(slot) or {}).get(att_name)
-                    if att is None:
+            for slot, atts in (self._obj(spath, slots) or {}).items():
+                for att_name, timelines in (self._obj(f"{spath}.{slot}", atts) or {}).items():
+                    apath = f"{spath}.{slot}.{att_name}"
+                    att = (((skin.get("attachments") or {}).get(slot)) or {}).get(att_name)
+                    if not isinstance(att, dict):
                         self.error(apath, "attachment not found in that skin and slot")
                         continue
-                    for tname, keys in (timelines or {}).items():
-                        self.keys(f"{apath}.{tname}", keys)
-                        if tname == "deform":
-                            if att.get("type") not in ("mesh", "linkedmesh", "boundingbox", "path", "clipping"):
-                                self.error(apath, "deform keys on an attachment without vertices")
-                                continue
-                            self.curve_shape(f"{apath}.deform", keys, 1)
-                            length = _deform_length(att)
-                            for i, k in enumerate(keys or []):
-                                offset, verts = k.get("offset", 0), k.get("vertices") or []
-                                if length is not None and offset + len(verts) > length:
-                                    self.error(f"{apath}.deform[{i}]", f"offset + vertices = {offset + len(verts)} exceeds {length}")
+                    for tname, keys in (self._obj(apath, timelines) or {}).items():
+                        if not self.keys(f"{apath}.{tname}", keys) or tname != "deform":
+                            continue
+                        if att.get("type") not in ("mesh", "linkedmesh", "boundingbox", "path", "clipping"):
+                            self.error(apath, "deform keys on an attachment without vertices")
+                            continue
+                        self.curve_shape(f"{apath}.deform", keys, 1)
+                        length = _deform_length(att)
+                        for i, k in enumerate(keys):
+                            offset, verts = k.get("offset", 0), k.get("vertices") or []
+                            if length is not None and offset + len(verts) > length:
+                                self.error(f"{apath}.deform[{i}]", f"offset + vertices = {offset + len(verts)} exceeds {length}")
 
     def draw_order(self, path: str, keys) -> None:
-        if keys is None:
+        """The reader walks offsets in slot order: they must name slots in
+        increasing setup index (else it loops forever in JS or throws in Java),
+        and no two may land on the same draw position."""
+        if keys is None or not self.keys(f"{path}.drawOrder", keys):
             return
-        self.keys(f"{path}.drawOrder", keys)
         count = len(self.slot_names)
         index = {name: i for i, name in enumerate(self.slot_names)}
-        for i, k in enumerate(keys or []):
-            for o in k.get("offsets") or []:
-                slot = o.get("slot")
+        for i, k in enumerate(keys):
+            kpath = f"{path}.drawOrder[{i}]"
+            offsets = k.get("offsets") or []
+            if not isinstance(offsets, list) or not all(isinstance(o, dict) for o in offsets):
+                self.error(kpath, "offsets must be a list of {slot, offset} objects")
+                continue
+            last, taken = -1, set()
+            for o in offsets:
+                slot, offset = o.get("slot"), o.get("offset", 0)
                 if slot not in index:
-                    self.error(f"{path}.drawOrder[{i}]", f"slot {slot!r} not found")
-                elif not 0 <= index[slot] + o.get("offset", 0) < count:
-                    self.error(f"{path}.drawOrder[{i}]", f"offset moves {slot!r} outside the draw order")
+                    self.error(kpath, f"slot {slot!r} not found")
+                    continue
+                if index[slot] <= last:
+                    self.error(kpath, f"offsets must list slots in setup order; {slot!r} comes too late")
+                last = index[slot]
+                target = index[slot] + offset if isinstance(offset, int) else None
+                if target is None or not 0 <= target < count:
+                    self.error(kpath, f"offset moves {slot!r} outside the draw order")
+                elif target in taken:
+                    self.error(kpath, f"two slots moved to draw position {target}")
+                else:
+                    taken.add(target)
 
     # ── keys and curves ──────────────────────────────────────────────────────
 
@@ -513,11 +590,11 @@ class _Checker:
                     self.warn(kpath, f"handle times outside the segment {t0}..{t1}: Spine curves use absolute times")
                     break
 
-    def color(self, path: str, value, length: int) -> None:
+    def color(self, path: str, value, lengths: tuple[int, ...]) -> None:
         if value is None:
             return
-        if not isinstance(value, str) or len(value) != length or not _HEX.match(value):
-            self.error(path, f"needs {length} hex digits, got {value!r}")
+        if not isinstance(value, str) or len(value) not in lengths or not _HEX.match(value):
+            self.error(path, f"needs {' or '.join(map(str, lengths))} hex digits, got {value!r}")
 
 
 def _num(value) -> bool:

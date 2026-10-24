@@ -67,7 +67,13 @@ def inspect_skeleton(project_path: str) -> dict:
     Args:
         project_path: Absolute path to the skeleton .json.
     """
-    return inspect(d.load(project_path))
+    doc = d.load(project_path)
+    try:
+        return inspect(doc)
+    except (AttributeError, TypeError, KeyError, ValueError):
+        errors = [str(f) for f in check(doc) if f.level == "error"][:10]
+        raise ValueError("cannot inspect a malformed skeleton; validate_skeleton reports:\n"
+                         + "\n".join(errors)) from None
 
 
 @mcp.tool()
@@ -302,6 +308,8 @@ def add_attachment(
     """
     size = att_ops.image_size(image_path)
     name = name or Path(image_path).stem
+    # Everything that could stop the copy or the repack is checked before the JSON is written.
+    att_ops.check_new_image(d.load(project_path), project_path, image_path, name, replace)
     result = edit_skeleton(
         project_path,
         lambda doc: att_ops.add_region(doc, slot, name, size, skin, x, y, rotation,

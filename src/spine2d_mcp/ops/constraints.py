@@ -59,9 +59,12 @@ def add_constraint(
     if type not in ("ik", "transform", "physics"):
         raise EditError("type must be ik, transform or physics (path constraints need path attachments)")
     existing = {c.get("name"): (k, c) for k, c in d.all_constraints(doc)}
+    in_skins: list[dict] = []
     if name in existing:
         if not replace:
             raise EditError(f"a {existing[name][0]} constraint named {name!r} already exists (pass replace=true)")
+        old_kind = existing[name][0]
+        in_skins = [s for s in d.skins(doc) if name in (s.get(old_kind) or [])]
         remove_constraint(doc, name, keep_timelines=True)
     entry: dict = {"name": name, "order": _next_order(doc) if order is None else order}
     detail: dict = {"type": type, "constraint": name}
@@ -114,6 +117,8 @@ def add_constraint(
                 )
 
     doc.setdefault(type, []).append(entry)
+    for skin in in_skins:  # a replaced constraint stays in the skins that had it
+        skin.setdefault(type, []).append(name)
     return {**detail, "order": entry["order"]}
 
 

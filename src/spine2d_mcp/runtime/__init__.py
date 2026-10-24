@@ -31,11 +31,14 @@ def _ensure_core() -> tuple[Path | None, str | None]:
     if npm is None:
         return None, "npm not found (needed once to install spine-core)"
     folder.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(
-        [npm, "install", "--prefix", str(folder), "--no-audit", "--no-fund", "--silent",
-         f"@esotericsoftware/spine-core@{SPINE_CORE_VERSION}"],
-        capture_output=True, text=True, timeout=300,
-    )
+    try:
+        proc = subprocess.run(
+            [npm, "install", "--prefix", str(folder), "--no-audit", "--no-fund", "--silent",
+             f"@esotericsoftware/spine-core@{SPINE_CORE_VERSION}"],
+            capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"installing spine-core {SPINE_CORE_VERSION} timed out after 300 s"
     if proc.returncode != 0:
         return None, f"could not install spine-core {SPINE_CORE_VERSION}: {proc.stderr.strip()[-300:]}"
     return folder, None
@@ -53,10 +56,13 @@ def runtime_check(project_path: str | Path, atlas_path: str | Path | None = None
     core, reason = _ensure_core()
     if core is None:
         return {"ran": False, "reason": reason}
-    proc = subprocess.run(
-        [node, str(_SCRIPT), str(project_path), str(atlas_path), str(core)],
-        capture_output=True, text=True, timeout=300,
-    )
+    try:
+        proc = subprocess.run(
+            [node, str(_SCRIPT), str(project_path), str(atlas_path), str(core)],
+            capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ran": False, "reason": "the runtime check timed out after 300 s"}
     try:
         result = json.loads(proc.stdout)
     except json.JSONDecodeError:

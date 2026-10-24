@@ -7,7 +7,6 @@ displays; the atlas the runtime loads is packed from that folder.
 
 from __future__ import annotations
 
-import math
 import shutil
 from pathlib import Path
 
@@ -53,9 +52,16 @@ def add_region(
     if slot_entry is None:
         raise EditError(f"no slot {slot!r}")
     if world:
+        # Local = bone⁻¹ · wanted world matrix, so a mirrored or unevenly scaled
+        # bone still shows the image at the given world angle and scale.
         t = d.world_transforms(doc)[slot_entry["bone"]]
         x, y = t.inverse_vector(x - t.x, y - t.y)
-        rotation -= math.degrees(math.atan2(t.c, t.a))
+        wanted = d.local_matrix({"rotation": rotation, "scaleX": scaleX, "scaleY": scaleY})
+        fields = d.decompose(d.mat_mul(d.mat_inv(d.matrix(t)), wanted))
+        if abs(fields["shearY"]) > 0.01:
+            raise EditError(f"bone {slot_entry['bone']!r} is scaled unevenly: the image would need a shear "
+                            "at that angle; give x, y, rotation relative to the bone instead")
+        rotation, scaleX, scaleY = fields["rotation"], fields["scaleX"], fields["scaleY"]
     skin_entry = d.find_skin(doc, skin)
     if skin_entry is None:
         skin_entry = {"name": skin, "attachments": {}}
@@ -85,6 +91,26 @@ def attachment_paths(doc: dict) -> set[str]:
     return paths
 
 
+def image_files(folder: Path) -> dict[str, Path]:
+    """Region name (path relative to the folder, no extension) -> PNG."""
+    if not folder.is_dir():
+        return {}
+    return {p.relative_to(folder).with_suffix("").as_posix(): p for p in sorted(folder.rglob("*.png"))}
+
+
+def check_new_image(doc: dict, project_path: str | Path, image_path: str | Path, name: str, replace: bool) -> Path:
+    """Before any write: the image can be copied in and the atlas repacked.
+    Returns where the image will go."""
+    folder = images_dir(project_path, doc)
+    target = folder / f"{name}.png"
+    if target.exists() and target.resolve() != Path(image_path).resolve() and not replace:
+        raise EditError(f"{target} already exists and is a different image (pass replace=true to overwrite it)")
+    missing = sorted(attachment_paths(doc) - set(image_files(folder)) - {name})
+    if missing:
+        raise EditError(f"cannot repack the atlas afterwards: no image in {folder} for {', '.join(missing)}")
+    return target
+
+
 def copy_image(image_path: str | Path, folder: Path, name: str) -> Path:
     target = folder / f"{name}.png"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -100,7 +126,7 @@ def repack(project_path: str | Path, atlas_path: str | Path | None = None) -> di
     folder = images_dir(project_path, doc)
     if not folder.is_dir():
         raise EditError(f"no images folder at {folder} (set skeleton.images or create it)")
-    files = {p.relative_to(folder).with_suffix("").as_posix(): p for p in sorted(folder.rglob("*.png"))}
+    files = image_files(folder)
     missing = sorted(attachment_paths(doc) - set(files))
     if missing:
         raise EditError(f"cannot repack: no image in {folder} for {', '.join(missing)}")

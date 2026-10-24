@@ -9,8 +9,6 @@ positions. Bone reordering remaps weighted-mesh bone indices.
 
 from __future__ import annotations
 
-import math
-
 from ..edits import EditError
 from ..spine import document as d
 
@@ -53,8 +51,23 @@ def _require_normal_chain(doc: dict, name: str) -> None:
             raise EditError(f"bone {b!r} has inherit {by_name[b]['inherit']!r}; only 'normal' chains can be edited in world space")
 
 
-def _world_angle(t: d.Affine) -> float:
-    return math.degrees(math.atan2(t.c, t.a))
+def _set_local(target: dict, m: d.Matrix, keys: tuple[str, ...]) -> dict[str, float]:
+    """Write the Spine fields of local matrix `m` onto a bone or attachment.
+    `keys` lists the fields the target can hold; refuses a needed field it lacks."""
+    fields = d.decompose(m)
+    if "shearY" not in keys and abs(fields["shearY"]) > 0.01:
+        raise EditError("the result would need a shear, which this attachment type cannot hold "
+                        "(the two bones are scaled differently)")
+    if "scaleX" not in keys and (abs(fields["scaleX"] - 1) > 1e-4 or abs(fields["scaleY"] - 1) > 1e-4):
+        raise EditError("the result would need a scale, which this attachment type cannot hold")
+    for key in keys:
+        value = round(fields.get(key, 0.0), 4)
+        default = 1 if key.startswith("scale") else 0
+        if key == "shearX" or value == default:
+            target.pop(key, None)
+        else:
+            target[key] = value
+    return fields
 
 
 def _vertex_attachments(doc: dict):
@@ -140,7 +153,9 @@ def set_bone(doc: dict, name: str, parent: str | None = None, **fields) -> dict:
 
 
 def _reparent(doc: dict, name: str, parent: str) -> None:
-    """Move a bone under a new parent, keeping its world position and angle."""
+    """Move a bone under a new parent, keeping its world transform: the new
+    local matrix is parent⁻¹ · world, decomposed into Spine's fields (so
+    mirrored and unevenly scaled parents keep the art unchanged)."""
     _bone(doc, parent)
     if parent == name or parent in _descendants(doc, name):
         raise EditError(f"cannot parent {name!r} to its own descendant {parent!r}")
@@ -152,9 +167,8 @@ def _reparent(doc: dict, name: str, parent: str) -> None:
     lx, ly = new_parent.inverse_vector(me.x - new_parent.x, me.y - new_parent.y)
     bone["parent"] = parent
     bone["x"], bone["y"] = round(lx, 4), round(ly, 4)
-    rotation = (_world_angle(me) - _world_angle(new_parent) - bone.get("shearX", 0)) % 360
-    rotation = rotation - 360 if rotation > 180 else rotation
-    _set_fields(bone, {"rotation": round(rotation, 4)}, _BONE_FIELDS, _BONE_DEFAULTS)
+    local = d.mat_mul(d.mat_inv(d.matrix(new_parent)), d.matrix(me))
+    _set_local(bone, local, ("rotation", "scaleX", "scaleY", "shearX", "shearY"))
     # The parent must precede the bone: move the bone's subtree after the parent's.
     moving = [name, *_descendants(doc, name)]
     order = [b["name"] for b in d.bones(doc) if b["name"] not in moving]
@@ -213,10 +227,10 @@ def rename_bone(doc: dict, name: str, to: str) -> dict:
     for s in d.slots(doc):
         if s.get("bone") == name:
             s["bone"] = to
-    for _, c in d.all_constraints(doc):
+    for kind, c in d.all_constraints(doc):
         if c.get("bone") == name:
             c["bone"] = to
-        if c.get("target") == name:
+        if kind != "path" and c.get("target") == name:  # a path constraint targets a slot
             c["target"] = to
         if "bones" in c:
             c["bones"] = [to if b == name else b for b in c["bones"]]
@@ -237,7 +251,8 @@ def remove_bone(doc: dict, name: str) -> dict:
     users = [f"bone {b['name']}" for b in d.bones(doc) if b.get("parent") == name]
     users += [f"slot {s['name']}" for s in d.slots(doc) if s.get("bone") == name]
     users += [f"{k} {c['name']}" for k, c in d.all_constraints(doc)
-              if name in (c.get("bone"), c.get("target")) or name in (c.get("bones") or [])]
+              if c.get("bone") == name or name in (c.get("bones") or [])
+              or (k != "path" and c.get("target") == name)]
     if users:
         raise EditError(f"bone {name!r} is used by {', '.join(users)}")
     _reorder_bones(doc, [b["name"] for b in d.bones(doc) if b["name"] != name])
@@ -270,29 +285,32 @@ def set_slot(doc: dict, name: str, bone: str | None = None, **fields) -> dict:
 
 
 def _rebind_slot(doc: dict, name: str, bone: str) -> None:
-    """Move a slot to another bone, keeping its attachments where they are."""
+    """Move a slot to another bone, keeping its attachments where they are
+    (new local = new bone⁻¹ · old bone · old local, for mirrored or unevenly
+    scaled bones too)."""
     slot = _slot(doc, name)
     _bone(doc, bone)
     _require_normal_chain(doc, slot["bone"])
     _require_normal_chain(doc, bone)
     world = d.world_transforms(doc)
     old, new = world[slot["bone"]], world[bone]
-    turn = _world_angle(old) - _world_angle(new)
+    to_new = d.mat_mul(d.mat_inv(d.matrix(new)), d.matrix(old))
 
     def remap(x: float, y: float) -> tuple[float, float]:
         wx, wy = old.apply(x, y)
         return tuple(round(v, 4) for v in new.inverse_vector(wx - new.x, wy - new.y))
 
     for skin in d.skins(doc):
-        for att in ((skin.get("attachments") or {}).get(name) or {}).values():
+        for att_name, att in (((skin.get("attachments") or {}).get(name)) or {}).items():
             kind = att.get("type", "region")
             if kind in ("region", "point"):
                 att["x"], att["y"] = remap(att.get("x", 0), att.get("y", 0))
-                rotation = round(att.get("rotation", 0) + turn, 4)
-                if rotation:
-                    att["rotation"] = rotation
-                else:
-                    att.pop("rotation", None)
+                local = d.local_matrix({k: att[k] for k in ("rotation", "scaleX", "scaleY") if k in att})
+                keys = ("rotation", "scaleX", "scaleY") if kind == "region" else ("rotation",)
+                try:
+                    _set_local(att, d.mat_mul(to_new, local), keys)
+                except EditError as e:
+                    raise EditError(f"attachment {att_name!r}: {e}") from None
             elif kind in _VERTEX_TYPES and "vertices" in att and not _is_weighted(att):
                 v = att["vertices"]
                 for i in range(0, len(v), 2):
@@ -302,9 +320,14 @@ def _rebind_slot(doc: dict, name: str, bone: str) -> None:
 
 def remove_slot(doc: dict, name: str) -> dict:
     _slot(doc, name)
-    for _, c in d.all_constraints(doc):
-        if c.get("target") == name:
-            raise EditError(f"slot {name!r} is the target of path constraint {c['name']!r}")
+    users = [f"path constraint {c['name']}" for c in d.constraints(doc, "path") if c.get("target") == name]
+    users += [f"clipping {skin.get('name')}/{slot}/{att_name}"
+              for skin in d.skins(doc) for slot, atts in (skin.get("attachments") or {}).items()
+              for att_name, att in (atts or {}).items() if (att or {}).get("end") == name]
+    users += [f"drawOrder keys of {anim_name}" for anim_name, anim in (doc.get("animations") or {}).items()
+              if any(o.get("slot") == name for k in (anim or {}).get("drawOrder") or [] for o in k.get("offsets") or [])]
+    if users:
+        raise EditError(f"slot {name!r} is still used by {', '.join(users)}; change those first")
     doc["slots"] = [s for s in d.slots(doc) if s["name"] != name]
     for skin in d.skins(doc):
         (skin.get("attachments") or {}).pop(name, None)

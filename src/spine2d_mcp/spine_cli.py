@@ -180,7 +180,9 @@ def spine_export(
         skeleton = skeletons[0]
 
     frames_dir = output_dir / "frames" if format == "png" else Path(tempfile.mkdtemp(prefix="spine-frames-"))
-    settings_file = Path(tempfile.mkstemp(suffix=".export.json")[1])
+    fd, settings_name = tempfile.mkstemp(suffix=".export.json")
+    os.close(fd)
+    settings_file = Path(settings_name)
     try:
         settings_file.write_text(json.dumps(_png_settings(input_path, frames_dir, skeleton, fps, scale, background)))
         run = run_spine(["-e", str(settings_file)], editor_version)
