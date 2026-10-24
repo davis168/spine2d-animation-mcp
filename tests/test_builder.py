@@ -92,6 +92,48 @@ def test_pivot_is_at_joint_not_center(synthetic_psd):
     assert abs(att.y) > 1.0
 
 
+def _world(project):
+    """World (x, y) of every bone; the builder writes no setup rotation or scale."""
+    world = {}
+    for b in project.bones:
+        px, py = world.get(b.parent, (0.0, 0.0))
+        world[b.name] = (px + b.x, py + b.y)
+    return world
+
+
+def test_limbs_pivot_at_their_round_cap_centre(synthetic_psd):
+    """Arms and legs rotate about the centre of their joint-end cap (half the
+    limb width in from the edge), so the round end stays put as the joint
+    turns. Fixture origin is (200, 90) in y-up canvas space (600-high canvas):
+    arm_left (100,120,40,140) -> cap centre PSD (120, 140) -> world (-80, 370);
+    leg_left (150,300,45,180) -> PSD (172.5, 322.5) -> world (-27.5, 187.5)."""
+    world = _world(build(parse_psd(synthetic_psd)).project)
+    assert world["arm_left"] == (-80.0, 370.0)
+    assert world["leg_left"] == (-27.5, 187.5)
+
+
+def test_hands_and_feet_pivot_at_the_parent_limbs_far_cap(synthetic_psd):
+    """A hand turns about the wrist, the centre of the arm's bottom cap, not
+    about its own edge: arm_left bottom 260 - 20 = PSD y 240 -> world y 270.
+    Feet likewise turn about the leg's bottom cap: 480 - 22.5 -> world y 52.5."""
+    world = _world(build(parse_psd(synthetic_psd)).project)
+    assert world["hand_left"] == (-80.0, 270.0)
+    assert world["foot_left"] == (-27.5, 52.5)
+
+
+def test_moving_pivots_keeps_every_image_where_the_psd_put_it(synthetic_psd):
+    parsed = parse_psd(synthetic_psd)
+    project = build(parsed).project
+    world = _world(project)
+    ox, oy = 200.0, 90.0  # fixture origin: bottom-centre of the parts
+    for layer in parsed.layers:
+        part = "torso" if layer.name == "body" else layer.name
+        att = project.skins[0].attachments[part][part]
+        cx = world[part][0] + att.x + ox
+        cy = world[part][1] + att.y + oy
+        assert (cx, cy) == (layer.left + layer.width / 2, 600 - (layer.top + layer.height / 2))
+
+
 def test_pivot_marker_overrides_heuristic(make_psd):
     """A `arm_left[pivot]` marker layer overrides the edge heuristic."""
     psd = make_psd([

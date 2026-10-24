@@ -59,6 +59,20 @@ _JOINT_SIDE: dict[str, str] = {
     "foot_right": "top",
 }
 
+# Limbs whose joint end is a round cap: the bone sits at the cap's centre (half
+# the limb width in from the joint edge), so the cap stays put as the joint
+# turns instead of orbiting a point on its rim.
+CAP_PARTS = {
+    "arm_left", "arm_right", "leg_left", "leg_right",
+    "hand_left", "hand_right", "foot_left", "foot_right",
+}
+
+# Extremities that turn about the parent limb's far cap (wrist, ankle) when the
+# parent limb is present, rather than about their own edge.
+TIP_PARTS = {"hand_left", "hand_right", "foot_left", "foot_right"}
+
+_OPPOSITE_SIDE = {"top": "bottom", "bottom": "top", "left": "right", "right": "left"}
+
 # Marker suffix for an explicit pivot override layer, e.g. "arm_left[pivot]".
 PIVOT_TAG = "[pivot]"
 
@@ -89,6 +103,12 @@ def joint_side(part: str) -> str | None:
     """Bbox edge facing the parent, or None to fall back to bbox center
     (used for the torso/root area where no single joint dominates)."""
     return _JOINT_SIDE.get(part)
+
+
+def far_side(part: str) -> str | None:
+    """Bbox edge facing away from the parent (the limb's free end)."""
+    side = joint_side(part)
+    return _OPPOSITE_SIDE.get(side) if side else None
 
 
 def resolve_chain(present_parts: set[str]) -> list[str]:

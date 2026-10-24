@@ -11,8 +11,9 @@ redundant default-valued fields.
 Notable 4.2 specifics:
 - Bone transform-inheritance field is `inherit` (default "normal"), NOT
   `transform` as in older versions.
-- Rotate animation keyframes use `angle`, not `rotation` (handled in the
-  animation models, added in Phase 1).
+- Rotate animation keyframes store the angle under `value` (not `angle`, the
+  3.x key, nor `rotation`); the reader silently treats a missing `value` as 0.
+  Animations are written by `spine/animation.py`.
 - Region attachment `width`/`height` are read without a default → required.
 - Skin `name` is read without a default → required (even for "default").
 """

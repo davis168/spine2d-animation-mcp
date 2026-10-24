@@ -7,8 +7,11 @@ Coordinate handling (the parts the old prototype got wrong):
   rotation in the setup pose, local offset = child_world - parent_world.
   (The old code wrote absolute coords for child bones — a format bug.)
 - A bone's pivot is the joint that connects it to its parent, NOT the layer
-  center: the edge of the bbox facing the parent (see conventions.joint_side),
-  or an explicit `[pivot]` marker. This makes rotation anatomically correct.
+  center, or an explicit `[pivot]` marker. Limbs (conventions.CAP_PARTS)
+  pivot at the centre of their round joint-end cap, half the limb width in
+  from the edge facing the parent, so the cap stays put as the joint turns;
+  hands and feet turn about the parent limb's far cap (wrist, ankle). Other
+  parts pivot at the edge facing the parent (the head at the chin).
 - The region attachment is offset from the bone so the image stays put:
   attachment offset = image_center_world - bone_pivot_world.
 - The skeleton origin (root) is the bottom-center of the character's bounds,
@@ -143,7 +146,7 @@ def _compute_pivots(
     world: dict[str, tuple[float, float]] = {}
     for part in chain:
         if part in present:
-            world[part] = _part_pivot(part, parts[part], parsed)
+            world[part] = _part_pivot(part, parts, parsed)
     # Virtual intermediates: place between nearest present ancestor and the
     # average of present direct descendants (or ancestor if none).
     for part in chain:
@@ -154,30 +157,39 @@ def _compute_pivots(
 
 
 def _part_pivot(
-    part: str, layer: PsdLayer, parsed: ParsedPsd
+    part: str, parts: dict[str, PsdLayer], parsed: ParsedPsd
 ) -> tuple[float, float]:
     # Explicit marker wins.
     if part in parsed.pivot_markers:
         mx, my = parsed.pivot_markers[part]
         return mx, parsed.height - my
 
-    side = conv.joint_side(part)
-    cx = layer.left + layer.width / 2.0
-    if side is None:
-        cy = layer.top + layer.height / 2.0
-        return cx, parsed.height - cy
-    # PSD y-down: "top" edge is layer.top, "bottom" edge is layer.top+height.
-    if side == "top":
-        cy = layer.top
-    elif side == "bottom":
-        cy = layer.top + layer.height
-    elif side == "left":
-        cx, cy = layer.left, layer.top + layer.height / 2.0
-    elif side == "right":
-        cx, cy = layer.left + layer.width, layer.top + layer.height / 2.0
+    layer = parts[part]
+    parent = conv.parent_of(part)
+    if part in conv.TIP_PARTS and parent in parts:
+        # Wrist / ankle: the centre of the parent limb's far cap.
+        x, y = _side_point(parts[parent], conv.far_side(parent), cap=True)
     else:
-        cy = layer.top + layer.height / 2.0
-    return cx, parsed.height - cy
+        side = conv.joint_side(part)
+        x, y = _side_point(layer, side, cap=part in conv.CAP_PARTS)
+    return x, parsed.height - y
+
+
+def _side_point(layer: PsdLayer, side: str | None, cap: bool) -> tuple[float, float]:
+    """PSD (y-down) point at the middle of a bbox edge, or with `cap` at the
+    centre of the round cap on that edge (half the limb width inside it).
+    No side: the bbox centre."""
+    cx, cy = layer.center
+    inset = min(layer.width, layer.height) / 2.0 if cap else 0.0
+    if side == "top":
+        return cx, layer.top + inset
+    if side == "bottom":
+        return cx, layer.top + layer.height - inset
+    if side == "left":
+        return layer.left + inset, cy
+    if side == "right":
+        return layer.left + layer.width - inset, cy
+    return cx, cy
 
 
 def _virtual_pivot(
