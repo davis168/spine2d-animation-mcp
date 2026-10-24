@@ -83,7 +83,7 @@ def preview_html(
          font: 14px/1.4 -apple-system, system-ui, sans-serif; }}
   h1 {{ font-size: 16px; margin: 0 0 4px; }}
   #status {{ margin: 0 0 12px; color: #8a8; }}
-  #player {{ width: 100%; max-width: 720px; height: 70vh; }}
+  #player {{ width: 100%; max-width: 720px; height: min(70vh, 640px); }}
 </style>
 </head>
 <body>
