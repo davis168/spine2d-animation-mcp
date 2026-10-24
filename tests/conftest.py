@@ -58,6 +58,14 @@ def synthetic_psd(tmp_path):
 
 
 @pytest.fixture
+def imported(synthetic_psd, tmp_path):
+    """The synthetic character run through the PSD importer (ImportResult)."""
+    from spine2d_mcp.pipeline import import_psd_to_spine
+
+    return import_psd_to_spine(synthetic_psd, str(tmp_path / "out"))
+
+
+@pytest.fixture
 def make_psd(tmp_path):
     """Factory: build a PSD from custom (name, left, top, w, h) tuples."""
     def _make(layers):
