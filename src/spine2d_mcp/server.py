@@ -11,7 +11,10 @@ from .ops import animation as anim_ops
 from .ops import attachments as att_ops
 from .ops import constraints as con_ops
 from .ops import rig as rig_ops
+from . import spine_cli
 from .pipeline import import_psd_to_spine as _import
+from .preview import preview_html as _preview
+from .runtime import runtime_check
 from .spine import document as d
 from .spine.check import check, summary
 from .spine.inspect import inspect
@@ -68,21 +71,36 @@ def inspect_skeleton(project_path: str) -> dict:
 
 
 @mcp.tool()
-def validate_skeleton(project_path: str, loops: list[str] | None = None) -> dict:
+def validate_skeleton(
+    project_path: str,
+    loops: list[str] | None = None,
+    runtime: bool = False,
+    atlas_path: str | None = None,
+) -> dict:
     """Check a skeleton JSON against the Spine 4.2 format: references, meshes,
     constraints, and animation keys (rotate `value` not `angle`, curve lengths,
     key order, events). Errors break loading or render wrongly; warnings are
     probably unintended.
 
+    With runtime=true it also loads the skeleton and atlas in spine-core
+    4.2.120 (the runtime spine-phaser-v4 4.2.x uses) via Node and steps every
+    animation; spine-core is installed into a cache on first use.
+
     Args:
         project_path: Absolute path to the skeleton .json.
         loops: Animation names meant to loop; each is checked for a pop where
             its last key differs from its first.
+        runtime: Also run the spine-core runtime check.
+        atlas_path: Atlas for the runtime check; default <skeleton>.atlas.
     """
     doc = d.load(project_path)
     findings = check(doc, loops)
-    result = report(findings)
-    return {"ok": not result["errors"], "summary": summary(doc), **result}
+    result = {"summary": summary(doc), **report(findings)}
+    ok = not result["errors"]
+    if runtime:
+        result["runtime"] = runtime_check(project_path, atlas_path)
+        ok = ok and result["runtime"].get("ok", True)
+    return {"ok": ok, **result}
 
 
 @mcp.tool()
@@ -305,6 +323,82 @@ def pack_atlas(project_path: str, atlas_path: str | None = None) -> dict:
         atlas_path: Atlas to write; default <skeleton>.atlas next to the JSON.
     """
     return att_ops.repack(project_path, atlas_path)
+
+
+@mcp.tool()
+def spine_import(
+    project_path: str,
+    spine_project: str | None = None,
+    skeleton_name: str | None = None,
+    editor_version: str | None = None,
+) -> dict:
+    """Import a skeleton JSON into a .spine project with the Spine editor's
+    CLI (needs Spine installed; set SPINE_EXECUTABLE if it is not in the
+    standard place). The editor's reader reports anything it cannot load.
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        spine_project: .spine file to create or import into; default next to the JSON.
+        skeleton_name: Name of the imported skeleton; default the JSON's name.
+        editor_version: Spine editor version to run (e.g. a 4.2.x release);
+            default $SPINE_EDITOR_VERSION or the launcher's default. Saving a
+            project in a newer editor upgrades it.
+    """
+    return spine_cli.spine_import(project_path, spine_project, skeleton_name, editor_version)
+
+
+@mcp.tool()
+def spine_export(
+    input_path: str,
+    output_dir: str,
+    format: str = "png",
+    animations: list[str] | None = None,
+    fps: int = 30,
+    scale: float = 100,
+    background: str | None = "ffffffff",
+    editor_version: str | None = None,
+) -> dict:
+    """Render or export with the Spine editor's CLI.
+
+    - png: one PNG per frame for each animation, in output_dir/frames.
+    - gif: one looping GIF per animation (encoded from the PNG frames).
+    - json / binary: skeleton data as that editor version writes it; for
+      spine-phaser-v4 4.2.x run a 4.2 editor (editor_version), or the data
+      will be a newer version the runtime cannot load.
+
+    Args:
+        input_path: Skeleton .json or .spine project.
+        output_dir: Folder to write into.
+        format: png, gif, json or binary.
+        animations: Only these animations (png/gif); default all.
+        fps: Frames per second (png/gif).
+        scale: Percent (png/gif).
+        background: RRGGBB or RRGGBBAA, or null for transparent PNGs.
+        editor_version: Spine editor version to run; default
+            $SPINE_EDITOR_VERSION or the launcher's default.
+    """
+    return spine_cli.spine_export(input_path, output_dir, format, animations, fps, scale, background, editor_version)
+
+
+@mcp.tool()
+def preview_html(
+    project_path: str,
+    atlas_path: str | None = None,
+    out_path: str | None = None,
+    animation: str | None = None,
+) -> dict:
+    """Write a self-contained HTML page that plays the skeleton in the official
+    Spine Web Player 4.2 (skeleton, atlas and images embedded; the player
+    script loads from unpkg). Its controls switch animations and skins.
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        atlas_path: Atlas; default <skeleton>.atlas next to the JSON.
+        out_path: HTML file to write; default <skeleton>_preview.html.
+        animation: Animation to start with; default the first.
+    """
+    path = _preview(project_path, atlas_path, out_path, animation)
+    return {"preview_path": str(path), "player": "@esotericsoftware/spine-player@4.2.120"}
 
 
 def main() -> None:
