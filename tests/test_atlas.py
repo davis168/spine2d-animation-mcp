@@ -23,6 +23,23 @@ def test_pack_pages_are_pow2():
     assert w & (w - 1) == 0 and h & (h - 1) == 0
 
 
+def test_pack_uses_compact_page():
+    """A handful of parts must land on a small, roughly square page — not a
+    tall strip down one edge of a max-size bin (10 parts came out 128x2048)."""
+    regions = [Region(f"part{i}", 40, 150) for i in range(10)]
+    layout = pack(regions, max_size=2048, padding=2)
+    assert len(layout.pages) == 1
+    w, h = layout.pages[0]
+    assert max(w, h) <= 512
+
+
+def test_pack_spills_to_extra_pages_when_full():
+    regions = [Region(f"part{i}", 200, 200) for i in range(3)]
+    layout = pack(regions, max_size=256, padding=2)
+    assert len(layout.pages) == 3
+    assert {r.page for r in layout.regions} == {0, 1, 2}
+
+
 def test_atlas_text_format(tmp_path):
     layout = pack([Region("head", 64, 64), Region("body", 100, 120)], max_size=512)
     out = write_atlas_text(layout, "character", tmp_path / "character.atlas")
