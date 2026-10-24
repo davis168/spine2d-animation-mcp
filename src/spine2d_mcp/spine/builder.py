@@ -11,6 +11,9 @@ Coordinate handling (the parts the old prototype got wrong):
   or an explicit `[pivot]` marker. This makes rotation anatomically correct.
 - The region attachment is offset from the bone so the image stays put:
   attachment offset = image_center_world - bone_pivot_world.
+- The skeleton origin (root) is the bottom-center of the character's bounds,
+  not the PSD canvas corner, so it is placed by its feet in Spine and Unity.
+  Pivots are computed in canvas space; only root-level bones are offset.
 
 Draw order (A1): slots are emitted in PSD z-order (bottom-to-top), which is the
 Spine draw order — independent of bone creation order.
@@ -60,12 +63,16 @@ def build(parsed: ParsedPsd, max_atlas_size: int = 2048) -> BuildResult:
     # World pivots for every bone in the chain (present + virtual).
     world = _compute_pivots(chain, present, parts, parsed)
 
+    # Origin: bottom-center of the character (y-up canvas space).
+    left, top, right, bottom = _parts_bounds(parts.values())
+    ox, oy = (left + right) / 2.0, float(parsed.height - bottom)
+
     bones: list[Bone] = [Bone(name=conv.ROOT_BONE)]
     for part in chain:
         parent = conv.parent_of(part)
         px, py = world[part]
         if parent == conv.ROOT_BONE:
-            lx, ly = px, py
+            lx, ly = px - ox, py - oy
         else:
             ppx, ppy = world[parent]
             lx, ly = px - ppx, py - ppy
@@ -95,8 +102,11 @@ def build(parsed: ParsedPsd, max_atlas_size: int = 2048) -> BuildResult:
         slots=slots,
         skins=[Skin(name="default", attachments=attachments)],
     )
-    project.skeleton.width = float(parsed.width)
-    project.skeleton.height = float(parsed.height)
+    # Setup-pose bounds relative to the origin (the feet are at y=0).
+    project.skeleton.x = left - ox
+    project.skeleton.y = 0.0
+    project.skeleton.width = float(right - left)
+    project.skeleton.height = float(bottom - top)
 
     validate(project)
 
@@ -109,6 +119,17 @@ def build(parsed: ParsedPsd, max_atlas_size: int = 2048) -> BuildResult:
         project=project,
         atlas=atlas,
         images={part: parts[part] for part in present},
+    )
+
+
+def _parts_bounds(layers) -> tuple[int, int, int, int]:
+    """Union bbox (left, top, right, bottom) of the layers, PSD y-down."""
+    layers = list(layers)
+    return (
+        min(l.left for l in layers),
+        min(l.top for l in layers),
+        max(l.left + l.width for l in layers),
+        max(l.top + l.height for l in layers),
     )
 
 

@@ -57,6 +57,17 @@ def test_child_bone_coords_are_relative_to_parent(synthetic_psd):
     assert by_name["head"].y > 0
 
 
+def test_origin_is_bottom_center_of_character(synthetic_psd):
+    """Root sits under the character's feet (Spine/Unity convention), not at
+    the PSD canvas corner. Fixture parts span x 95..305, y 20..510 (y-down) on a
+    600-high canvas, so the origin is (200, 90) in y-up canvas coordinates."""
+    project = build(parse_psd(synthetic_psd)).project
+    sk = project.skeleton
+    assert (sk.x, sk.y, sk.width, sk.height) == (-105.0, 0.0, 210.0, 490.0)
+    hip = next(b for b in project.bones if b.name == "hip")
+    assert hip.x == 0.0  # symmetric fixture: hip is centered over the origin
+
+
 def test_draw_order_follows_psd_zstack(make_psd):
     """Slots must be in PSD z-order (bottom-to-top), NOT bone hierarchy order.
     Put arm_left BELOW body, arm_right ABOVE body in the stack."""
