@@ -53,7 +53,12 @@ def test_ik_missing_target_fails():
 def test_attachment_to_missing_slot_fails():
     proj = SpineProject(
         bones=[Bone(name="root")],
-        skins=[Skin(attachments={"nope": {"a": RegionAttachment(width=1, height=1)}})],
+        skins=[
+            Skin(
+                name="default",
+                attachments={"nope": {"a": RegionAttachment(width=1, height=1)}},
+            )
+        ],
     )
     with pytest.raises(SpineValidationError, match="missing slot"):
         validate(proj)
