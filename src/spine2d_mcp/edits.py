@@ -51,18 +51,22 @@ def edit_skeleton(
     out_path: str | None = None,
     loops: list[str] | None = None,
     allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
 ) -> dict:
     """Apply `change(doc)` and save to `out_path` (default: in place).
 
     `change` mutates the document and may return a JSON-ready description of
     what it did. Raises EditError (nothing written) when the change itself
     is invalid or introduces checker errors, and project.NeedsAnswer when the
-    file's format version differs from its game project's.
+    file's format version differs from its game project's or that is unclear.
+    With save_project_version the file's version is saved as the game
+    project's declaration after the edit is written.
     """
     doc = d.load(project_path)
     version = editable_version(doc, project_path)
     target = Path(out_path or project_path)
-    game = proj.for_existing_file(target, version, allow_version_mismatch, file=project_path)
+    game = proj.for_existing_file(target, version, allow_version_mismatch, file=project_path,
+                                  save_project_version=save_project_version)
     before = {_key(f) for f in check(doc, loops)}
     detail = change(doc)
     findings = check(doc, loops)
@@ -74,6 +78,8 @@ def edit_skeleton(
     d.save(doc, target)
     result = {"project_path": str(target), "summary": summary(doc), "version": game.note(version),
               **report(findings)}
+    if save_project_version:
+        result["notes"] = [proj.save_declaration(game, version)]
     if detail is not None:
         result["changed"] = detail
     return result

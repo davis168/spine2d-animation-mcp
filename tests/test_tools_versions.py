@@ -20,6 +20,7 @@ from spine2d_mcp.spine.check import check
 
 FIXTURES = Path(__file__).parent / "fixtures"
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+needs_spine = pytest.mark.skipif(spine_cli.find_spine() is None, reason="Spine editor not installed")
 PHASER_42 = {"@esotericsoftware/spine-phaser-v4": "~4.2.0"}
 
 
@@ -92,7 +93,9 @@ def test_convert_tool_writes_a_new_file_and_verifies(game):
     result = server.convert_skeleton(str(path))  # the game project's version
     assert result["converted"] and result["to"] == "4.3" and result["errors"] == []
     out = Path(result["project_path"])
-    assert out.name == "rig-4.3.json" and Path(result["atlas_path"]).name == "rig-4.3.atlas"
+    # one atlas for both: no copy that could drift when either skeleton repacks it
+    assert out.name == "rig-4.3.json" and Path(result["atlas_path"]).name == "rig.atlas"
+    assert not (path.parent / "rig-4.3.atlas").exists() and "atlas_note" not in result
     assert d.load(path)["skeleton"]["spine"] == "4.2.43"  # the original is kept
     if shutil.which("node"):
         assert result["verify"]["ok"], result["verify"]
@@ -120,11 +123,12 @@ def test_convert_tool_asks_before_losing_anything(game, tmp_path):
 def test_convert_into_another_folder_keeps_the_images(game, tmp_path):
     path = _copy_rig(game(declared="4.3") / "spine")
     elsewhere = str(tmp_path / "elsewhere" / "rig.json")
-    assert server.convert_skeleton(str(path), out_path=elsewhere)["needs_answer"]  # no game project there
-    result = server.convert_skeleton(str(path), "4.3", out_path=elsewhere, verify=False)
+    # no game project there, and 4.3 is the only other version: nothing to ask
+    result = server.convert_skeleton(str(path), out_path=elsewhere, verify=False)
+    assert result["to"] == "4.3"
     images = d.load(result["project_path"])["skeleton"]["images"]
     assert (tmp_path / "elsewhere" / images).resolve() == (path.parent / "images").resolve()
-    assert (tmp_path / "elsewhere" / "rig.atlas").exists()
+    assert result["atlas_path"] == str(path.with_suffix(".atlas")) and "atlas_path=" in result["atlas_note"]
 
 
 # ── 4.3 editing ─────────────────────────────────────────────────────────────
@@ -267,12 +271,14 @@ def test_converting_in_place_verifies_against_the_original(game):
     assert result["verify"]["ok"] and result["verify"]["runtimes"] == ["spine-core 4.2.120", "spine-core 4.3.13"]
 
 
-def test_convert_refuses_to_overwrite_another_atlas(game):
-    path = _copy_rig(game(declared="4.3") / "spine")
-    (path.parent / "rig-4.3.atlas").write_text("someone else's atlas\n")
-    with pytest.raises(EditError, match="different atlas"):
-        server.convert_skeleton(str(path), verify=False)
-    assert not (path.parent / "rig-4.3.json").exists()
+def test_converted_copies_share_the_atlas_unless_they_have_their_own(tmp_path):
+    from spine2d_mcp.atlas import default_atlas
+
+    (tmp_path / "hero.atlas").write_text("")
+    assert default_atlas(tmp_path / "hero-4.3.json") == tmp_path / "hero.atlas"
+    assert default_atlas(tmp_path / "boss-1.5.json") == tmp_path / "boss-1.5.atlas"  # not a Spine version
+    (tmp_path / "hero-4.3.atlas").write_text("")
+    assert default_atlas(tmp_path / "hero-4.3.json") == tmp_path / "hero-4.3.atlas"
 
 
 def test_convert_asks_its_own_question_on_mismatch(game):
@@ -296,3 +302,56 @@ def test_converted_names(game, tmp_path):
     assert Path(server.convert_skeleton(str(named), verify=False)["project_path"]).name == "hero-4.3.json"
     other = _copy_rig(root / "b", "boss-1.5")
     assert Path(server.convert_skeleton(str(other), verify=False)["project_path"]).name == "boss-1.5-4.3.json"
+
+
+def test_editing_in_an_unclear_project_asks_once(game):
+    root = game(package={"@esotericsoftware/spine-phaser-v4": "^4.2.0"})  # nothing installed: 4.2 or 4.3?
+    path = _copy_rig(root / "spine")
+    original = path.read_text()
+    asked = server.remove_animation(str(path), "move")
+    assert asked["needs_answer"] and "does this game project use" in asked["question"]
+    assert path.read_text() == original
+    answers = [o["answer"] for o in asked["options"]]
+    assert answers[0].startswith("4.2, like rig.json") and answers[1].startswith("4.3: convert rig.json")
+    assert "save_project_version=True" in asked["options"][1]["instead"]
+    done = server.remove_animation(str(path), "move", **asked["options"][0]["call_again_with"])
+    assert done["errors"] == [] and "saved format version 4.2" in done["notes"][0]
+    assert (root / ".spine-version").read_text() == "4.2\n"
+    again = server.add_animation(str(path), "nod", timelines={"bones": {"driver": {"rotate": [{"value": 0}]}}})
+    assert "needs_answer" not in again and again["errors"] == []  # settled: not asked again
+
+
+def test_saving_a_contradicting_version_is_refused(game):
+    path = _copy_rig(game(package=PHASER_42, declared="4.3") / "spine")  # package says 4.2: unclear
+    asked = server.remove_animation(str(path), "move")
+    assert asked["needs_answer"] and asked["recommended"].startswith("4.2, like rig.json")
+    path43 = Path(server.convert_skeleton(str(path), "4.3", allow_version_mismatch=True, verify=False)["project_path"])
+    with pytest.raises(ValueError, match="package.json says 4.2"):
+        server.remove_animation(str(path43), "move", save_project_version=True)
+
+
+def test_a_missing_editor_is_reported(monkeypatch, tmp_path):
+    (tmp_path / "updates").mkdir()
+    (tmp_path / "updates" / "4.2.43").write_bytes(b"")
+    monkeypatch.setattr(spine_cli, "_UPDATES", (tmp_path / "updates",))
+    with pytest.raises(spine_cli.SpineCliError, match="download 4.3.26 in the Spine launcher"):
+        spine_cli.editor_for("4.3")
+    assert spine_cli.header_release("4.3") == "4.3.26"  # a new file can still name the tested release
+
+
+@needs_spine
+@pytest.mark.parametrize("make", ["imported43", "converted"])
+def test_editor_round_trip(make, imported43, game, tmp_path, request):
+    if make == "imported43":
+        path = imported43.project_path
+        server.add_animation(str(path), "idle", preset="idle")
+        server.add_constraint(str(path), "physics", "hair", bone="head", preset="hair")
+    else:
+        source = _copy_rig(game(declared="4.3") / "spine")
+        path = Path(server.convert_skeleton(str(source), verify=False)["project_path"])
+    made = server.spine_import(str(path))
+    assert made["ok"] and made["format_version"] == "4.3" and made["editor"].startswith("4.3."), made
+    exported = server.spine_export(made["spine_project"], str(tmp_path / "back"), "json", format_version="4.3")
+    assert exported["ok"] and exported["format_version"] == "4.3", exported
+    back = next(Path(f) for f in exported["files"] if f.endswith(".json"))
+    assert check(d.load(back)) == [] and versions.of(d.load(back)) == "4.3"

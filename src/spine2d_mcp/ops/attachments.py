@@ -12,6 +12,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from ..atlas import default_atlas
 from ..atlas.packer import Region, pack
 from ..atlas.writer import compose_pages, write_atlas_text
 from ..edits import EditError
@@ -135,7 +136,7 @@ def repack(project_path: str | Path, atlas_path: str | Path | None = None) -> di
         with Image.open(path) as im:
             images[name] = im.convert("RGBA")
     layout = pack([Region(name, im.width, im.height) for name, im in images.items()])
-    atlas_path = Path(atlas_path) if atlas_path else project_path.with_suffix(".atlas")
+    atlas_path = Path(atlas_path) if atlas_path else default_atlas(project_path)
     stem = atlas_path.stem
     write_atlas_text(layout, stem, atlas_path)
     pages = compose_pages(layout, images, stem, atlas_path.parent)

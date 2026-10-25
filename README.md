@@ -76,9 +76,9 @@ A Spine runtime loads only skeleton data of its own **format version** (the majo
 
 - **Existing files** are edited, checked, previewed and run in their own version.
 - **New files** (`import_psd_to_spine`, data exported from a `.spine` project) take, in order: the `format_version` you pass; the **game project's version**, found by searching up from the output folder to the repository root for a `package.json` with an `@esotericsoftware/spine-*` dependency (the installed release first, else a range that pins one version: `~4.2.0` counts, `^4.2.0` does not, since a fresh install of it gets 4.3) or a `.spine-version` file holding e.g. `4.3`; then `$SPINE_FORMAT_VERSION`.
-- **When in doubt, the tools ask.** If nothing says, the signals disagree, or a file's version differs from its game project's, the tool writes nothing and returns `needs_answer` with a question and options; the agent asks you in chat. An answer about an undeclared project can be saved as its `.spine-version`. If you already named a version in your request, the agent uses it without asking (`allow_version_mismatch`) and mentions the difference once.
-- **Converting** is explicit: `convert_skeleton` writes `hero-4.3.json` (and `hero-4.3.atlas`) next to `hero.json`. 4.2 → 4.3 loses nothing; 4.3 → 4.2 lists what 4.2 cannot hold (sliders, transform property mappings, scale modes, ...) and drops it only if you agree.
-- **Spine editor**: an editor imports JSON of its own version only, so the CLI tools pick one per file: `editor_version`, else a matching release in `SPINE_EDITOR_VERSION` (one or several, e.g. `4.2.43,4.3.26`), else the newest stable release the Spine launcher has downloaded. New files carry that full release in `skeleton.spine` (e.g. `4.3.26`), because the 4.3 editor warns on any other value; runtimes read only the major.minor.
+- **When in doubt, the tools ask.** If nothing says which version a game project uses, its signals disagree or are unclear, or a file's version differs from its game project's, the tool writes nothing and returns `needs_answer` with a question and options; the agent asks you in chat. Your answer about the project can be saved as its `.spine-version` (`save_project_version`), so it is asked once. If you already named a version in your request, the agent uses it without asking (`allow_version_mismatch`) and mentions the difference once.
+- **Converting** is explicit: `convert_skeleton` writes `hero-4.3.json` next to `hero.json`, sharing its atlas and images (tools find `hero.atlas` for it). 4.2 → 4.3 loses nothing; 4.3 → 4.2 lists what 4.2 cannot hold (sliders, transform property mappings, scale modes, ...) and drops it only if you agree.
+- **Spine editor**: an editor imports JSON of its own version only, so the CLI tools pick one per file: `editor_version`, else a matching release in `SPINE_EDITOR_VERSION` (one or several, e.g. `4.2.43,4.3.26`), else the newest stable release the Spine launcher has downloaded; with none, they say which release to download. New files carry that full release in `skeleton.spine` (e.g. `4.3.26`), because the 4.3 editor warns on any other value; runtimes read only the major.minor.
 - `SPINE_EXECUTABLE` points at the Spine executable when it is not in the standard place (`/Applications/Spine.app/Contents/MacOS/Spine` on macOS).
 
 ## Requirements
@@ -127,6 +127,7 @@ src/spine2d_mcp/
   server.py            FastMCP server: tool definitions
   pipeline.py          PSD -> Spine project orchestration
   edits.py             load -> change -> check -> save for every editing tool
+  conversion.py        convert_skeleton: target, questions, the converted file, verification
   project.py           a game project's format version, and when to ask
   preview.py           Spine Web Player page
   spine_cli.py         Spine editor CLI: import, export, project info
@@ -141,7 +142,7 @@ src/spine2d_mcp/
   spine/versions.py    supported format versions and their editor/runtime releases
   spine/document.py    skeleton JSON as a dict (either constraint layout): load, save, world transforms
   spine/check.py       format checker, per version
-  spine/convert.py     4.2 <-> 4.3 conversion
+  spine/convert.py     4.2 <-> 4.3 conversion of the skeleton document
   spine/inspect.py     skeleton summary for inspect_skeleton
   spine/animation.py   easing shorthand -> Spine animation JSON
   spine/presets.py     idle, walk, wave, jump

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ..atlas import default_atlas
 from ..spine import versions
 
 _SCRIPT = Path(__file__).with_name("runtime_check.mjs")
@@ -84,7 +85,7 @@ def _run(project_path: Path, atlas_path: Path, poses: bool) -> dict:
 def runtime_check(project_path: str | Path, atlas_path: str | Path | None = None) -> dict:
     """{"ran": bool, ...}: the runtime's load and per-animation results, or why it was skipped."""
     project_path = Path(project_path)
-    atlas_path = Path(atlas_path) if atlas_path else project_path.with_suffix(".atlas")
+    atlas_path = Path(atlas_path) if atlas_path else default_atlas(project_path)
     return _run(project_path, atlas_path, poses=False)
 
 

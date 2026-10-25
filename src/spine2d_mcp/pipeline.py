@@ -15,7 +15,7 @@ from .psd.parser import parse_psd
 from .spine import versions
 from .spine.builder import build
 from .spine.writer import write_json
-from .spine_cli import editor_for
+from .spine_cli import header_release
 
 # The Spine editor displays individual part images, not the atlas; the
 # skeleton's `images` path (relative to the JSON) tells it where they are.
@@ -26,7 +26,7 @@ def header_version(format_version: str) -> str:
     """The `skeleton.spine` value for a new file: the editor release that would
     import it (runtimes read only the major.minor; the 4.3 editor warns on any
     other release)."""
-    return editor_for(versions.get(format_version).version)
+    return header_release(versions.get(format_version).version)
 
 
 @dataclass
@@ -37,7 +37,7 @@ class ImportResult:
     images_dir: Path
 
 
-def import_psd_to_spine(psd_path: str, out_dir: str, format_version: str = versions.NEWEST) -> ImportResult:
+def import_psd_to_spine(psd_path: str, out_dir: str, *, format_version: str) -> ImportResult:
     psd_path = str(psd_path)
     stem = Path(psd_path).stem
     out = Path(out_dir)

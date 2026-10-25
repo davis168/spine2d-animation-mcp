@@ -71,9 +71,14 @@ def _ik(version: str, params: dict) -> tuple[dict, dict]:
         if "scaleY" in params:
             raise EditError("give scaleY or uniform, not both")
         params["scaleY"] = "uniform" if params.pop("uniform") else "none"
+    _check_scale_y(params)
+    return params, {**_IK, "scaleY": "none"}
+
+
+def _check_scale_y(params: dict) -> None:
+    """4.3 IK and physics scale modes."""
     if params.get("scaleY", "none") not in SCALE_Y_MODES:
         raise EditError(f"scaleY must be none, uniform or volume, not {params['scaleY']!r}")
-    return params, {**_IK, "scaleY": "none"}
 
 
 def _transform(version: str, params: dict, entry: dict) -> None:
@@ -193,8 +198,7 @@ def add_constraint(
         fields = {**_PHYSICS, **_PHYSICS_DEFAULTS[version]}
         if version == "4.3":
             fields["scaleY"] = "none"
-            if params.get("scaleY", "none") not in SCALE_Y_MODES:
-                raise EditError(f"scaleY must be none, uniform or volume, not {params['scaleY']!r}")
+            _check_scale_y(params)
         elif params.get("scaleY", "none") != "none":
             _only_43(version, "physics scaleY")
         else:

@@ -13,6 +13,7 @@ import html
 import json
 from pathlib import Path
 
+from .atlas import default_atlas
 from .spine import versions
 
 
@@ -50,7 +51,7 @@ def preview_html(
     title: str | None = None,
 ) -> Path:
     project_path = Path(project_path)
-    atlas_path = Path(atlas_path) if atlas_path else project_path.with_suffix(".atlas")
+    atlas_path = Path(atlas_path) if atlas_path else default_atlas(project_path)
     out_path = Path(out_path) if out_path else project_path.with_name(f"{project_path.stem}_preview.html")
     atlas_text = atlas_path.read_text(encoding="utf-8")
     skeleton_doc = json.loads(project_path.read_text(encoding="utf-8"))

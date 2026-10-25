@@ -98,7 +98,7 @@ def _write_key(k: dict, values: dict, version: str) -> None:
 
 # ── 4.2 -> 4.3 ──────────────────────────────────────────────────────────────
 
-def _upgrade_42_43(out: Conversion, allow_lossy: bool) -> None:
+def _convert_42_to_43(out: Conversion, allow_lossy: bool) -> None:
     doc = out.doc
     keyed = _keyed(doc)
     idle = d.never_applied(doc)
@@ -180,7 +180,7 @@ def _setup_default_43(prop: str, mapped: list[str], effective: dict) -> float:
 
 # ── 4.3 -> 4.2 ──────────────────────────────────────────────────────────────
 
-def _downgrade_43_42(out: Conversion, allow_lossy: bool) -> None:
+def _convert_43_to_42(out: Conversion, allow_lossy: bool) -> None:
     doc = out.doc
     losses: list[str] = []
     by_kind: dict[str, list[dict]] = {}
@@ -371,4 +371,4 @@ def _attachments(doc: dict):
         yield skin_name, slot, att
 
 
-_STEPS = {("4.2", "4.3"): _upgrade_42_43, ("4.3", "4.2"): _downgrade_43_42}
+_STEPS = {("4.2", "4.3"): _convert_42_to_43, ("4.3", "4.2"): _convert_43_to_42}

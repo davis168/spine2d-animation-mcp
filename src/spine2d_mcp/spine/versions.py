@@ -68,6 +68,16 @@ def get(version: str | None) -> FormatVersion:
     return FORMATS[key]
 
 
+_SUFFIX = re.compile(r"-(\d+\.\d+(?:\.\d+)?)$")
+
+
+def unversioned(stem: str) -> str:
+    """A file stem without a format version suffix: "hero-4.3" -> "hero" (a
+    converted copy's name); "boss-1.5" stays, 1.5 being no Spine version."""
+    m = _SUFFIX.search(stem)
+    return stem[:m.start()] if m and is_supported(major_minor(m.group(1))) else stem
+
+
 def layout(doc: dict) -> str:
     """Which reader's layout to read the document with: its own format version
     when supported, else the closest guess (a 4.3-style `constraints` array

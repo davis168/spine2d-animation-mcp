@@ -4,30 +4,25 @@ format 4.2 or 4.3, each in its own version."""
 from __future__ import annotations
 
 import functools
-import os
-import re
-import shutil
-import tempfile
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
 from . import project as proj
 from . import spine_cli
-from .edits import EditError, edit_skeleton, editable_version, report
+from .conversion import convert_file
+from .edits import edit_skeleton, report
 from .ops import animation as anim_ops
 from .ops import attachments as att_ops
 from .ops import constraints as con_ops
 from .ops import rig as rig_ops
-from .pipeline import header_version
 from .pipeline import import_psd_to_spine as _import
-from .preview import _atlas_pages, player_version
+from .preview import player_version
 from .preview import preview_html as _preview
-from .runtime import compare_poses, runtime_check
+from .runtime import runtime_check
 from .spine import document as d
 from .spine import versions
 from .spine.check import check, summary
-from .spine.convert import LossyConversion, convert
 from .spine.inspect import inspect
 from .spine.presets import LOOPING
 
@@ -91,7 +86,7 @@ def import_psd_to_spine(
     if out_dir is None:
         out_dir = str(src.parent / f"{src.stem}_spine")
     version, game, notes = proj.for_new_file(out_dir, format_version, allow_version_mismatch, save_project_version)
-    result = _import(psd_path, out_dir, version)
+    result = _import(psd_path, out_dir, format_version=version)
     if save_project_version:
         notes.append(proj.save_declaration(game, version))
     return {
@@ -184,6 +179,7 @@ def add_animation(
     replace: bool = False,
     out_path: str | None = None,
     allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
 ) -> dict:
     """Add an animation from a preset, from keyframes, or both (keyframes
     override the preset per bone/slot timeline).
@@ -223,6 +219,8 @@ def add_animation(
         out_path: Write to this path instead of editing in place.
         allow_version_mismatch: Edit even though the file's format version
             differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
     """
     loops = [name] if (loop if loop is not None else preset in LOOPING) else None
     return edit_skeleton(
@@ -233,13 +231,14 @@ def add_animation(
         out_path,
         loops,
         allow_version_mismatch,
+        save_project_version,
     )
 
 
 @mcp.tool()
 @_asks
 def remove_animation(project_path: str, name: str, out_path: str | None = None,
-                     allow_version_mismatch: bool = False) -> dict:
+                     allow_version_mismatch: bool = False, save_project_version: bool = False) -> dict:
     """Delete an animation from the skeleton (refused while a 4.3 slider plays it).
 
     Args:
@@ -248,15 +247,18 @@ def remove_animation(project_path: str, name: str, out_path: str | None = None,
         out_path: Write to this path instead of editing in place.
         allow_version_mismatch: Edit even though the file's format version
             differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
     """
     return edit_skeleton(project_path, lambda doc: anim_ops.remove_animation(doc, name), out_path,
-                         allow_version_mismatch=allow_version_mismatch)
+                         allow_version_mismatch=allow_version_mismatch,
+                         save_project_version=save_project_version)
 
 
 @mcp.tool()
 @_asks
 def edit_rig(project_path: str, operations: list[dict], out_path: str | None = None,
-             allow_version_mismatch: bool = False) -> dict:
+             allow_version_mismatch: bool = False, save_project_version: bool = False) -> dict:
     """Edit the setup pose: a list of operations applied in order, written
     only if the result is still a valid skeleton of its format version.
 
@@ -280,9 +282,12 @@ def edit_rig(project_path: str, operations: list[dict], out_path: str | None = N
         out_path: Write to this path instead of editing in place.
         allow_version_mismatch: Edit even though the file's format version
             differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
     """
     return edit_skeleton(project_path, lambda doc: rig_ops.edit_rig(doc, operations), out_path,
-                         allow_version_mismatch=allow_version_mismatch)
+                         allow_version_mismatch=allow_version_mismatch,
+                         save_project_version=save_project_version)
 
 
 @mcp.tool()
@@ -302,6 +307,7 @@ def add_constraint(
     replace: bool = False,
     out_path: str | None = None,
     allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
 ) -> dict:
     """Add an IK, transform, physics or (4.3) slider constraint, written in
     the skeleton's format version. Options one version names differently are
@@ -342,6 +348,8 @@ def add_constraint(
         out_path: Write to this path instead of editing in place.
         allow_version_mismatch: Edit even though the file's format version
             differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
     """
     return edit_skeleton(
         project_path,
@@ -351,13 +359,14 @@ def add_constraint(
         ),
         out_path,
         allow_version_mismatch=allow_version_mismatch,
+        save_project_version=save_project_version,
     )
 
 
 @mcp.tool()
 @_asks
 def remove_constraint(project_path: str, name: str, out_path: str | None = None,
-                      allow_version_mismatch: bool = False) -> dict:
+                      allow_version_mismatch: bool = False, save_project_version: bool = False) -> dict:
     """Remove a constraint by name, with its skin entries and animation timelines.
 
     Args:
@@ -366,9 +375,12 @@ def remove_constraint(project_path: str, name: str, out_path: str | None = None,
         out_path: Write to this path instead of editing in place.
         allow_version_mismatch: Edit even though the file's format version
             differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
     """
     return edit_skeleton(project_path, lambda doc: con_ops.remove_constraint(doc, name), out_path,
-                         allow_version_mismatch=allow_version_mismatch)
+                         allow_version_mismatch=allow_version_mismatch,
+                         save_project_version=save_project_version)
 
 
 @mcp.tool()
@@ -387,6 +399,7 @@ def add_attachment(
     replace: bool = False,
     atlas_path: str | None = None,
     allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
 ) -> dict:
     """Add a PNG as a region attachment on a slot (e.g. a mouth shape or an
     alternate hand to swap with an attachment timeline), copy it into the
@@ -405,6 +418,8 @@ def add_attachment(
         atlas_path: Atlas to rewrite; default <skeleton>.atlas next to the JSON.
         allow_version_mismatch: Edit even though the file's format version
             differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
     """
     size = att_ops.image_size(image_path)
     name = name or Path(image_path).stem
@@ -415,6 +430,7 @@ def add_attachment(
         lambda doc: att_ops.add_region(doc, slot, name, size, skin, x, y, rotation,
                                        world=world, set_as_setup=set_as_setup, replace=replace),
         allow_version_mismatch=allow_version_mismatch,
+        save_project_version=save_project_version,
     )
     doc = d.load(project_path)
     result["image"] = str(att_ops.copy_image(image_path, att_ops.images_dir(project_path, doc), name))
@@ -435,9 +451,6 @@ def pack_atlas(project_path: str, atlas_path: str | None = None) -> dict:
     return att_ops.repack(project_path, atlas_path)
 
 
-_VERSION_SUFFIX = re.compile(r"-(\d+\.\d+(?:\.\d+)?)$")  # "hero-4.2" -> "hero"; a non-Spine "-1.5" stays
-
-
 @mcp.tool()
 @_asks
 def convert_skeleton(
@@ -448,6 +461,7 @@ def convert_skeleton(
     allow_version_mismatch: bool = False,
     verify: bool = True,
     atlas_path: str | None = None,
+    save_project_version: bool = False,
 ) -> dict:
     """Convert a skeleton JSON to another format version (4.2 <-> 4.3).
 
@@ -456,9 +470,9 @@ def convert_skeleton(
     scale modes, clipping convex/inverse, cross-slot linked meshes, draw
     order folders), listing each; allow_lossy drops exactly those.
 
-    Writes a new file next to the original (hero.json -> hero-4.3.json) with
-    a copy of its atlas under the new name; the images and atlas pages are
-    shared. The original is replaced only when out_path names it.
+    Writes a new file next to the original (hero.json -> hero-4.3.json) that
+    shares its atlas and images; tools find hero.atlas for hero-4.3.json. The
+    original is replaced only when out_path names it.
 
     With verify (default), both skeletons are played in their own spine-core
     releases and every bone's pose is compared frame by frame (physics
@@ -466,7 +480,8 @@ def convert_skeleton(
 
     Args:
         project_path: Absolute path to the skeleton .json.
-        to_version: "4.2" or "4.3"; default the game project's version.
+        to_version: "4.2" or "4.3"; default the game project's version, else
+            the other supported version.
         out_path: Where to write; default <name>-<version>.json beside it.
         allow_lossy: Convert even though some parts are dropped (only when the
             user agreed to lose them).
@@ -474,113 +489,11 @@ def convert_skeleton(
             project's (only when the user said so).
         verify: Compare poses in both runtimes after converting.
         atlas_path: The original's atlas; default <skeleton>.atlas.
+        save_project_version: Also save to_version as the game project's
+            .spine-version (when the project did not say).
     """
-    src = Path(project_path)
-    doc = d.load(src)
-    file_version = editable_version(doc, src)
-    if to_version is None:
-        game = proj.detect(Path(out_path) if out_path else src)
-        if game.version and game.version != file_version and versions.is_supported(game.version):
-            to_version = game.version
-        elif game.version == file_version:
-            return {"converted": False, "note": f"{src.name} is already {file_version}, the game project's "
-                                                f"version ({game.source}); pass to_version to convert anyway"}
-        else:
-            others = [v for v in versions.SUPPORTED if v != file_version]
-            raise proj.NeedsAnswer(
-                f"Convert {src.name} (format {file_version}) to which format version? "
-                + (game.note(file_version) if game.version or game.problem else "No game project version found."),
-                [{"answer": v, "call_again_with": {"to_version": v}} for v in reversed(others)],
-                recommended=others[-1])
-    target_version = versions.get(to_version).version
-    if target_version == file_version:
-        raise EditError(f"{src.name} is already format version {file_version}")
-    suffix = _VERSION_SUFFIX.search(src.stem)
-    stem = src.stem[:suffix.start()] if suffix and versions.is_supported(versions.major_minor(suffix.group(1))) \
-        else src.stem
-    out = Path(out_path) if out_path else src.with_name(f"{stem}-{target_version}.json")
-    if out_path is None and out.exists():
-        raise EditError(f"{out} already exists; pass out_path (that file to overwrite it, or another name)")
-    game = proj.detect(out)
-    if game.version and game.version != target_version and not allow_version_mismatch:
-        if game.version == file_version:
-            keep = {"answer": f"Keep {src.name} in {file_version}, the game project's version", "instead": "nothing to do"}
-        else:
-            keep = {"answer": f"Convert to {game.version}, the game project's version",
-                    "call_again_with": {"to_version": game.version}}
-        raise proj.NeedsAnswer(
-            f"The game project uses Spine {game.version} ({game.source}), but conversion to {target_version} was "
-            f"asked for; a {target_version} skeleton will not load in this game.",
-            [keep, {"answer": f"Convert to {target_version} anyway", "call_again_with": {"allow_version_mismatch": True}}],
-            recommended=keep["answer"])
-    try:
-        conversion = convert(doc, target_version, allow_lossy)
-    except LossyConversion as lossy:
-        raise proj.NeedsAnswer(
-            f"Converting {src.name} from {file_version} to {target_version} would lose: "
-            + "; ".join(lossy.losses) + ". Convert anyway and drop these?",
-            [{"answer": f"Keep it in {file_version} (do not convert)", "instead": "nothing to do"},
-             {"answer": "Convert and drop them", "call_again_with": {"allow_lossy": True}}],
-            recommended=f"Keep it in {file_version} (do not convert)") from None
-    atlas = Path(atlas_path) if atlas_path else src.with_suffix(".atlas")
-    shared = out.with_suffix(".atlas")
-    if (atlas.is_file() and shared.exists() and shared.resolve() != atlas.resolve()
-            and shared.read_text(encoding="utf-8") != atlas.read_text(encoding="utf-8")):
-        raise EditError(f"{shared} already exists and is a different atlas; pass out_path with another name")
-    new_doc = conversion.doc
-    new_doc["skeleton"]["spine"] = header_version(target_version)
-    images = (new_doc.get("skeleton") or {}).get("images")
-    if images and out.parent.resolve() != src.parent.resolve():
-        target = (src.parent / images).resolve()
-        new_doc["skeleton"]["images"] = os.path.relpath(target, out.parent.resolve()).replace(os.sep, "/") + "/"
-    # Converting in place replaces the original, so verify against a copy of it.
-    original = src
-    if out.resolve() == src.resolve() and verify:
-        fd, name = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        original = Path(shutil.copyfile(src, name))
-    d.save(new_doc, out)
-
-    findings = check(new_doc)
-    result = {"converted": True, "from": file_version, "to": target_version, "project_path": str(out),
-              "summary": summary(new_doc), "changed": conversion.changed, **report(findings),
-              "version": game.note(target_version)}
-    if conversion.lost:
-        result["lost"] = conversion.lost
-    if conversion.dropped_editor_data:
-        result["dropped_editor_data"] = conversion.dropped_editor_data
-    try:
-        if atlas.is_file():
-            result["atlas_path"] = str(_share_atlas(atlas, out))
-            if verify:
-                result["verify"] = compare_poses(original, out, atlas)
-                if conversion.lost:
-                    result["verify"]["note"] = "parts were dropped (see lost), so differences there are expected"
-        elif verify:
-            result["verify"] = {"ran": False, "reason": f"no atlas at {atlas} (pass atlas_path)"}
-    except Exception as e:  # the converted file is written; report the rest rather than fail
-        result.setdefault("verify", {"ran": False, "reason": f"{type(e).__name__}: {e}"})
-    finally:
-        if original != src:
-            original.unlink(missing_ok=True)
-    return result
-
-
-def _share_atlas(atlas: Path, skeleton: Path) -> Path:
-    """Give the converted skeleton an atlas under its own name, so tools that
-    look for <skeleton>.atlas find it: a copy of the text beside it (pages stay
-    shared), plus the pages when it lives in another folder."""
-    target = skeleton.with_suffix(".atlas")
-    if target.resolve() == atlas.resolve():
-        return target
-    text = atlas.read_text(encoding="utf-8")
-    if not target.exists() or target.read_text(encoding="utf-8") != text:
-        target.write_text(text, encoding="utf-8")
-    if target.parent.resolve() != atlas.parent.resolve():
-        for page in _atlas_pages(text):
-            if (atlas.parent / page).is_file() and not (target.parent / page).exists():
-                shutil.copyfile(atlas.parent / page, target.parent / page)
-    return target
+    return convert_file(project_path, to_version, out_path, allow_lossy, allow_version_mismatch, verify,
+                        atlas_path, save_project_version)
 
 
 @mcp.tool()
@@ -649,7 +562,8 @@ def spine_export(
     if source.suffix.lower() == ".json":
         version = spine_cli.json_version(source)
         if format in ("json", "binary"):
-            proj.for_existing_file(Path(output_dir), version, allow_version_mismatch, action="export", file=source)
+            game = proj.for_existing_file(Path(output_dir), version, allow_version_mismatch, action="export",
+                                          file=source, save_project_version=save_project_version)
     elif format in ("json", "binary"):
         version, game, _ = proj.for_new_file(output_dir, format_version, allow_version_mismatch, save_project_version)
     else:  # images: any editor that can open the project; prefer the game project's version

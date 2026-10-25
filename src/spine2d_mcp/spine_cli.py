@@ -82,16 +82,9 @@ def installed_editors() -> list[str]:
     return sorted(found, key=_release_key)
 
 
-def editor_for(format_version: str | None, editor_version: str | None = None) -> str | None:
-    """The editor release to run for skeleton data of `format_version` (None:
-    any supported version, newest first)."""
-    if editor_version:
-        if format_version and versions.major_minor(editor_version) != format_version:
-            raise SpineCliError(
-                f"editor {editor_version} reads and writes format {versions.major_minor(editor_version)}, but this "
-                f"is {format_version} data: the Spine editor imports only its own format version (use a "
-                f"{format_version}.x editor, e.g. {versions.get(format_version).editor})")
-        return editor_version
+def _chosen(format_version: str | None) -> str | None:
+    """A release in $SPINE_EDITOR_VERSION or installed for the format version
+    (None: any supported version, newest first)."""
     wanted = [format_version] if format_version else list(reversed(versions.SUPPORTED))
     listed = [v.strip() for v in os.environ.get("SPINE_EDITOR_VERSION", "").split(",") if v.strip()]
     installed = installed_editors()
@@ -102,7 +95,33 @@ def editor_for(format_version: str | None, editor_version: str | None = None) ->
         matching = [r for r in installed if versions.major_minor(r) == version]
         if matching:
             return matching[-1]
-    return versions.get(format_version).editor if format_version else None
+    return None
+
+
+def header_release(format_version: str) -> str:
+    """The editor release a new file of this format version names in its
+    header: the one that would import it, else the tested release."""
+    return _chosen(format_version) or versions.get(format_version).editor
+
+
+def editor_for(format_version: str | None, editor_version: str | None = None) -> str | None:
+    """The editor release to run for skeleton data of `format_version`.
+    Refuses when the launcher has no stable release of it."""
+    if editor_version:
+        if format_version and versions.major_minor(editor_version) != format_version:
+            raise SpineCliError(
+                f"editor {editor_version} reads and writes format {versions.major_minor(editor_version)}, but this "
+                f"is {format_version} data: the Spine editor imports only its own format version (use a "
+                f"{format_version}.x editor, e.g. {versions.get(format_version).editor})")
+        return editor_version
+    release = _chosen(format_version)
+    if release or format_version is None:
+        return release
+    if any(folder.is_dir() for folder in _UPDATES):
+        raise SpineCliError(
+            f"no stable Spine {format_version} editor is installed: download {versions.get(format_version).editor} "
+            "in the Spine launcher (or name one in SPINE_EDITOR_VERSION)")
+    return versions.get(format_version).editor  # the launcher's folder is elsewhere: let it fetch the release
 
 
 def json_version(path: str | Path) -> str:

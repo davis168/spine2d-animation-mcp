@@ -417,11 +417,11 @@ def for_new_file(target: str | Path, requested: str | None = None, allow_version
             _version_options(versions.SUPPORTED, versions.NEWEST),
             recommended=versions.NEWEST)
     if save_project_version:
-        _check_declaration(project, version)
+        check_declaration(project, version)
     return version, project, notes
 
 
-def _check_declaration(project: ProjectVersion, version: str) -> None:
+def check_declaration(project: ProjectVersion, version: str) -> None:
     if project.version is not None and project.version != version:
         raise ValueError(f"the game project already uses {project.version} ({project.source}); "
                          f"not writing a {DECLARATION} that contradicts it")
@@ -434,20 +434,30 @@ def save_declaration(project: ProjectVersion, version: str) -> str:
     """Write `.spine-version` for a game project whose version was unknown or unclear."""
     if project.version == version:
         return f"the game project already declares {version} ({project.source}); nothing saved"
-    _check_declaration(project, version)
+    check_declaration(project, version)
     path = project.declaration_file()
     path.write_text(f"{version}\n", encoding="utf-8")
     return f"saved format version {version} for this game project in {_display(path)}"
 
 
 def for_existing_file(where: str | Path, file_version: str, allow_version_mismatch: bool = False,
-                      action: str = "edit", file: str | Path | None = None) -> ProjectVersion:
-    """The game project at `where` (the skeleton, or where its output goes);
+                      action: str = "edit", file: str | Path | None = None,
+                      save_project_version: bool = False) -> ProjectVersion:
+    """The game project at `where` (the skeleton, or where its output goes).
     NeedsAnswer when the skeleton `file`'s format version differs from the
-    project's and that has not been allowed."""
+    project's, or the project's version is unclear, and going ahead has not
+    been allowed. With save_project_version the caller saves `file_version`
+    as the project's declaration once its work succeeds."""
     project = detect(where)
-    if project.version and project.version != file_version and not allow_version_mismatch:
-        source = Path(file or where)
+    source = Path(file or where)
+    if save_project_version:
+        check_declaration(project, file_version)
+        return project
+    if allow_version_mismatch:
+        return project
+    if project.unclear:
+        raise _which_version(project, source, file_version, action)
+    if project.version and project.version != file_version:
         raise NeedsAnswer(
             f"{source.name} is a Spine {file_version} file, but the game project uses {project.version} "
             f"({project.source}), so the game cannot load it. Convert it to {project.version} first, or {action} "
@@ -458,3 +468,24 @@ def for_existing_file(where: str | Path, file_version: str, allow_version_mismat
               "call_again_with": {"allow_version_mismatch": True}}],
             recommended=f"Convert it to {project.version} first, then {action} the converted file")
     return project
+
+
+def _which_version(project: ProjectVersion, source: Path, file_version: str, action: str) -> NeedsAnswer:
+    """Ask which version an unclear game project uses, before working on a file."""
+    candidates = [v for v in (project.candidates or versions.SUPPORTED) if versions.is_supported(v)]
+    options = []
+    if project.package_version in (None, file_version):
+        options.append({"answer": f"{file_version}, like {source.name}: {action} it and save {file_version} as the "
+                                  "project's version", "call_again_with": {"save_project_version": True}})
+    for v in sorted(set(candidates) - {file_version}, reverse=True):
+        save = ", save_project_version=True" if project.package_version in (None, v) else ""
+        options.append({"answer": f"{v}: convert {source.name} to {v} first",
+                        "instead": f"convert_skeleton(project_path={str(source)!r}, to_version={v!r}{save})"})
+    options.append({"answer": f"Not sure: {action} it as {file_version} anyway",
+                    "call_again_with": {"allow_version_mismatch": True}})
+    recommended = next((o["answer"] for o in options if project.package_version
+                        and o["answer"].startswith(project.package_version)), options[0]["answer"])
+    return NeedsAnswer(
+        f"Which Spine format version does this game project use? {project.problem}. {source.name} is "
+        f"{file_version}; the answer can be saved as {_display(project.declaration_file())} so it is not asked "
+        "again.", options, recommended=recommended)
