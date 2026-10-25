@@ -401,6 +401,35 @@ def test_folders_and_clips_through_the_43_editor(imported43, tmp_path):
     assert _errors(back) == []
 
 
+@needs_spine
+def test_json_exports_get_back_what_the_43_editor_import_lost(imported43, tmp_path):
+    path = str(imported43.project_path)
+    server.edit_rig(path, [{"op": "add_slot", "name": "mask", "bone": "torso", "index": 1},
+                           {"op": "add_slot", "name": "notch", "bone": "torso", "index": 2}]
+                    + [{"op": "rename_slot", "name": n, "to": f"arms/{n}"} for n in ("arm_left", "arm_right")]
+                    + [{"op": "rename_slot", "name": n, "to": f"arms/hands/{n}"} for n in ("hand_left", "hand_right")])
+    server.add_clipping(path, "mask", [[-60, 0], [60, 0], [60, 150], [-60, 150]], end="torso", inverse=True)
+    server.add_clipping(path, "notch", [[0, 0], [40, 0], [10, 10], [0, 40]], end="torso")  # concave, not convex
+    hands = ["arms/hands/hand_left", "arms/hands/hand_right"]
+    server.add_animation(path, "swap", timelines={"drawOrderFolder": {"arms/hands": [{"time": 0.5, "order": hands[::-1]}]}})
+    made = server.spine_import(path)
+    assert made["ok"] and len(made["changed_on_import"]) == 3 and "recorded" in made["note"]
+    out = server.spine_export(made["spine_project"], str(tmp_path / "back"), "json", format_version="4.3")
+    assert len(out["restored"]) == 3, out
+    back = json.loads(Path(next(f for f in out["files"] if f.endswith(".json"))).read_text())
+    skin = back["skins"][0]["attachments"]
+    assert skin["mask"]["clip"].get("inverse") is True and not skin["mask"]["clip"].get("convex")
+    assert "convex" not in skin["notch"]["clip"] and "inverse" not in skin["notch"]["clip"]
+    entry, = back["animations"]["swap"]["drawOrderFolder"]
+    assert entry == d.load(path)["animations"]["swap"]["drawOrderFolder"][0]
+    assert _errors(back) == []
+    binary = server.spine_export(made["spine_project"], str(tmp_path / "bin"), "binary", format_version="4.3")
+    assert any("binary export cannot get back" in w for w in binary["warnings"])
+    kept = server.spine_export(made["spine_project"], str(tmp_path / "raw"), "json", format_version="4.3",
+                               restore=False)
+    assert "restored" not in kept
+
+
 @needs_node
 def test_converting_clips_and_draw_orders_keeps_poses(imported, tmp_path):
     path = str(imported.project_path)

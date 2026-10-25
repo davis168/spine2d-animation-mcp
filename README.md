@@ -31,7 +31,7 @@ The Spine editor has no live scripting API, so the server works on the files (sk
 | `convert_skeleton` | Convert a skeleton between 4.2 and 4.3 into a new file; refuses a lossy conversion unless agreed; verifies poses in both runtimes |
 | `spine_import` | Import the JSON into a `.spine` project with the Spine CLI, using an editor of the file's version |
 | `spine_export` | Render PNG frame sequences or GIFs, or export JSON/binary, with the Spine CLI |
-| `preview_html` | A self-contained Spine Web Player page in the file's version (skeleton, atlas and images embedded) |
+| `preview_html` | A self-contained Spine Web Player page in the file's version (skeleton, atlas and images embedded), or with `runtime="phaser"` a Phaser 4 game page with the matching spine-phaser-v4 (served over HTTP) |
 
 A typical session, in plain language to Claude: *"Import /path/to/hero.psd, add the idle, walk and wave presets, validate with the runtime check, export GIFs and make a preview."*
 
@@ -80,7 +80,7 @@ A draw order key may give `"order"` (every slot, back to front) instead of the o
 
 - **IK** aims a bone's x axis at the target, so it suits rigs whose bones point along their limbs. Importer rigs have unrotated bones; `add_constraint` warns when the setup pose would swing. Aim importer limbs with rotate keys.
 - **Automatic weights** follow distance only, not the image's shape; check bends in the preview and adjust with `weights` where needed.
-- **What the Spine 4.3 editor (4.3.26) changes when it imports JSON**: every clip comes in convex and none inverse (it does not read either flag), and a nested draw order folder's draw order keys are dropped; the runtime reads all of them. `add_clipping`, `set_draw_order_keys` and `spine_import` say when this applies.
+- **What the Spine 4.3 editor (4.3.26) loses when it imports JSON**: it does not read clipping `convex` and `inverse` (every clip comes in convex, none inverse) and drops a nested draw order folder's keys; the runtimes read them. `spine_import` records them beside the `.spine` project and JSON exports with `spine_export` put them back (binary exports and rendered frames say they cannot).
 - `move_pivot`, reparenting and slot rebinding work in world space and require `inherit: normal` along the chain.
 
 ## Spine versions
@@ -92,7 +92,7 @@ A Spine runtime loads only skeleton data of its own **format version** (the majo
 | 4.2 | 4.2.43 | 4.2.120 | `@esotericsoftware/spine-phaser-v4@v4.2-latest` (Phaser ≥ 4.1) |
 | 4.3 | 4.3.26 | 4.3.13 | `@esotericsoftware/spine-phaser-v4@latest` (Phaser ≥ 4.2.1) |
 
-Every 4.3 runtime release (spine-core 4.3.0 to 4.3.13) loads and plays the files the tools write; `validate_skeleton` plays a file in the game project's installed release when it has one.
+Every 4.3 runtime release (spine-core 4.3.0 to 4.3.13) loads and plays the files the tools write, and so does a Phaser 4.2.1 game with spine-phaser-v4 4.3.13 (4.2 files: Phaser 4.1.0 with 4.2.120); `validate_skeleton` plays a file in the game project's installed release when it has one. Any stable 4.3 editor can import them: `spine_import` hands the editor a copy whose header names its own release (the editor warns on any other), and an editor older than a fix the Spine changelog lists for something the skeleton uses (bone-driven slider import before 4.3.08, CLI import before 4.3.14, deform key import before 4.3.18, transform mix export before 4.3.24) is named in the warnings. Betas never count.
 
 - **Existing files** are edited, checked, previewed and run in their own version.
 - **New files** (`import_psd_to_spine`, data exported from a `.spine` project) take, in order: the `format_version` you pass; the **game project's version**, found by searching up from the output folder to the repository root for a `package.json` with an `@esotericsoftware/spine-*` dependency (the installed release first, else a range that pins one version: `~4.2.0` counts, `^4.2.0` does not, since a fresh install of it gets 4.3) or a `.spine-version` file holding e.g. `4.3`; then `$SPINE_FORMAT_VERSION`.

@@ -20,6 +20,7 @@ from .ops import rig as rig_ops
 from .ops import shapes as shape_ops
 from .ops import skins as skin_ops
 from .pipeline import import_psd_to_spine as _import
+from .preview import phaser_html as _phaser
 from .preview import player_version
 from .preview import preview_html as _preview
 from .runtime import runtime_check
@@ -944,7 +945,8 @@ def spine_import(
     so the editor is picked for the file's version (newest installed stable
     release, or $SPINE_EDITOR_VERSION); its reader reports anything it cannot
     load. changed_on_import lists what the 4.3 editor's import changes
-    (clipping convex/inverse, nested folders' draw order keys).
+    (clipping convex/inverse, nested folders' draw order keys); it is
+    recorded beside the project, and spine_export's JSON exports put it back.
 
     Args:
         project_path: Absolute path to the skeleton .json.
@@ -969,6 +971,7 @@ def spine_export(
     format_version: str | None = None,
     allow_version_mismatch: bool = False,
     save_project_version: bool = False,
+    restore: bool = True,
 ) -> dict:
     """Render or export with the Spine editor's CLI.
 
@@ -977,6 +980,9 @@ def spine_export(
     - json / binary: skeleton data in a format version: a JSON input keeps its
       own; a .spine project exports in format_version, else the game
       project's (from output_dir), else $SPINE_FORMAT_VERSION, else it asks.
+      A JSON export from a project made by spine_import gets back what the
+      4.3 editor's import lost (clip convex/inverse, nested folder keys),
+      unless restore=false or the export shows it was changed in the editor.
 
     Args:
         input_path: Skeleton .json or .spine project.
@@ -992,6 +998,7 @@ def spine_export(
             project's (only when the user said so).
         save_project_version: Save format_version as the game project's
             .spine-version (when the project did not say).
+        restore: Put back what the editor's import lost (JSON exports).
     """
     source = Path(input_path)
     game = None
@@ -1006,7 +1013,7 @@ def spine_export(
         detected = proj.detect(output_dir).version
         version = format_version or (detected if versions.is_supported(detected) else None)
     result = spine_cli.spine_export(input_path, output_dir, format, animations, fps, scale, background,
-                                    editor_version, version)
+                                    editor_version, version, restore)
     if game is not None and save_project_version and result.get("ok"):
         result["notes"] = [proj.save_declaration(game, version)]
     return result
@@ -1018,18 +1025,36 @@ def preview_html(
     atlas_path: str | None = None,
     out_path: str | None = None,
     animation: str | None = None,
+    runtime: str = "player",
 ) -> dict:
-    """Write a self-contained HTML page that plays the skeleton in the official
-    Spine Web Player of its format version (4.2.120 or 4.3.13; skeleton, atlas
-    and images embedded; the player script loads from unpkg). Its controls
-    switch animations and skins.
+    """Write an HTML page that plays the skeleton.
+
+    - runtime="player": the official Spine Web Player of its format version
+      (4.2.120 or 4.3.13), self-contained (skeleton, atlas and images
+      embedded; the player script loads from unpkg); it opens from disk.
+    - runtime="phaser": a Phaser 4 game with spine-phaser-v4, the game
+      runtime of its format version (4.2: 4.2.120 on Phaser 4.1.0; 4.3:
+      4.3.13 on Phaser 4.2.1), loading the files beside it, so serve the
+      folder over HTTP (the result gives a command) and open the URL.
+
+    Both have pickers for animations and skins.
 
     Args:
         project_path: Absolute path to the skeleton .json.
         atlas_path: Atlas; default <skeleton>.atlas next to the JSON.
-        out_path: HTML file to write; default <skeleton>_preview.html.
+        out_path: HTML file to write; default <skeleton>_preview.html or <skeleton>_phaser.html.
         animation: Animation to start with; default the first.
+        runtime: player or phaser.
     """
+    release = versions.get(versions.of(d.load(project_path)))
+    if runtime == "phaser":
+        path = _phaser(project_path, atlas_path, out_path, animation)
+        return {"preview_path": str(path), "runtime": f"phaser@{release.phaser} + "
+                f"@esotericsoftware/spine-phaser-v4@{release.runtime}",
+                "serve": f"python3 -m http.server 8000 --directory {path.parent}",
+                "url": f"http://localhost:8000/{path.name}"}
+    if runtime != "player":
+        raise EditError("runtime must be player or phaser")
     path = _preview(project_path, atlas_path, out_path, animation)
     return {"preview_path": str(path), "player": f"@esotericsoftware/spine-player@{player_version(d.load(project_path))}"}
 

@@ -24,6 +24,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from . import editor_quirks
 from .spine import document as d
 from .spine import versions
 
@@ -183,13 +184,31 @@ def spine_import(
     project_path = Path(project_path)
     version = json_version(project_path)
     target = Path(spine_project) if spine_project else project_path.with_suffix(".spine")
-    args = ["-i", str(project_path), "-o", str(target), "-r"]
-    if skeleton_name:
-        args.append(skeleton_name)
-    run = run_spine(args, editor_for(version, editor_version))
+    editor = editor_for(version, editor_version)
+    doc = json.loads(project_path.read_text(encoding="utf-8"))
+    source, header = project_path, (doc.get("skeleton") or {}).get("spine")
+    if editor and header != editor and versions.major_minor(header) == versions.major_minor(editor):
+        # An editor warns unless the header names its own release; the data
+        # is the same across a format version's releases, so import a copy
+        # (beside the original, so its images path still resolves).
+        source = project_path.with_name(f".{project_path.stem}.import-{editor}.json")
+        source.write_text(json.dumps({**doc, "skeleton": {**doc["skeleton"], "spine": editor}}), encoding="utf-8")
+    try:
+        run = run_spine(["-i", str(source), "-o", str(target), "-r", skeleton_name or project_path.stem], editor)
+    finally:
+        if source != project_path:
+            source.unlink(missing_ok=True)
     result = _result(run, spine_project=str(target), format_version=version)
-    changed = import_changes(json.loads(project_path.read_text(encoding="utf-8")))
-    return {**result, "changed_on_import": changed} if changed else result
+    caveats = editor_quirks.editor_caveats(run.editor or editor, doc)
+    if caveats:
+        result.setdefault("warnings", []).extend(caveats)
+    changed = import_changes(doc)
+    if changed:
+        result["changed_on_import"] = changed
+    if run.ok and editor_quirks.save_record(target, skeleton_name or project_path.stem, project_path, doc):
+        result["note"] = ("recorded what the editor's import loses; JSON exports from this project with "
+                          "spine_export put it back")
+    return result
 
 
 def import_changes(doc: dict) -> list[str]:
@@ -267,6 +286,7 @@ def spine_export(
     background: str | None = "ffffffff",
     editor_version: str | None = None,
     format_version: str | None = None,
+    restore: bool = True,
 ) -> dict:
     """Export with the Spine CLI: png (frame sequences), gif (encoded from the
     frames), json or binary (skeleton data in the editor's format version).
@@ -292,6 +312,18 @@ def spine_export(
                       files=sorted(str(p) for p in output_dir.iterdir() if p.is_file()))
         exported = versions.major_minor(run.editor) if run.editor else None
         out["format_version"] = exported
+        record = editor_quirks.record_path(input_path)
+        if restore and run.ok and input_path.suffix.lower() == ".spine" and record.is_file():
+            saved = json.loads(record.read_text(encoding="utf-8"))
+            if format == "json":
+                target = output_dir / f"{saved.get('skeleton')}.json"
+                restored = editor_quirks.restore(target, saved) if target.is_file() else []
+                if restored:
+                    out["restored"] = restored
+            else:
+                out.setdefault("warnings", []).append(
+                    "the editor's import lost clip convex/inverse flags or nested folder keys that a binary export "
+                    "cannot get back; export json to have them restored")
         if version and exported and exported != version:
             out.setdefault("warnings", []).append(
                 f"exported by Spine {run.editor}: the data is format {exported}, not the {version} asked for")
@@ -320,9 +352,14 @@ def spine_export(
             for name in set(groups) - set(animations):
                 for p in groups.pop(name):
                     p.unlink()
+        record = editor_quirks.record_path(input_path)
+        lost = ["the frames show the project as the editor imported it: clips lost convex/inverse or nested folder "
+                "keys (preview_html shows the JSON as written)"] if record.is_file() else []
         if format == "png":
-            return _result(run, frames_dir=str(frames_dir),
-                           animations={k: len(v) for k, v in sorted(groups.items())})
+            out = _result(run, frames_dir=str(frames_dir), animations={k: len(v) for k, v in sorted(groups.items())})
+            if lost:
+                out.setdefault("warnings", []).extend(lost)
+            return out
         gifs = {}
         for name, paths in sorted(groups.items()):
             images = [Image.open(p).convert("RGB") for p in paths]
@@ -330,7 +367,10 @@ def spine_export(
             images[0].save(target, save_all=True, append_images=images[1:],
                            duration=gif_durations(len(images), fps), loop=0, optimize=True)
             gifs[name] = {"path": str(target), "frames": len(images)}
-        return _result(run, gifs=gifs)
+        out = _result(run, gifs=gifs)
+        if lost:
+            out.setdefault("warnings", []).extend(lost)
+        return out
     finally:
         settings_file.unlink(missing_ok=True)
         if format == "gif":

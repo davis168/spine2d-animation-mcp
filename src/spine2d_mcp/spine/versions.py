@@ -19,14 +19,15 @@ from dataclasses import dataclass
 class FormatVersion:
     version: str  # "4.3"
     editor: str  # the editor release the tools are tested with
-    runtime: str  # spine-core / spine-player release for the runtime check and preview
+    runtime: str  # spine-core / spine-player / spine-phaser-v4 release for the runtime check and previews
+    phaser: str  # the Phaser 4 release that spine-phaser-v4 runtime needs
     constraint_kinds: tuple[str, ...]
 
 
 FORMATS: dict[str, FormatVersion] = {
-    "4.2": FormatVersion("4.2", editor="4.2.43", runtime="4.2.120",
+    "4.2": FormatVersion("4.2", editor="4.2.43", runtime="4.2.120", phaser="4.1.0",
                          constraint_kinds=("ik", "transform", "path", "physics")),
-    "4.3": FormatVersion("4.3", editor="4.3.26", runtime="4.3.13",
+    "4.3": FormatVersion("4.3", editor="4.3.26", runtime="4.3.13", phaser="4.2.1",
                          constraint_kinds=("ik", "transform", "path", "physics", "slider")),
 }
 SUPPORTED = tuple(FORMATS)  # oldest first

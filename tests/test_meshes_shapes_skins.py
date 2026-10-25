@@ -411,6 +411,48 @@ def test_a_setup_attachment_only_some_skins_hold_is_valid(imported43):
     assert checks["default"]["not_shown"] == ["hat: hat"] and checks["hero"]["not_shown"] == []
 
 
+@pytest.mark.parametrize("version", ["4.2", "4.3"])
+def test_phaser_preview_pins_the_game_runtime(version, imported, imported43, tmp_path):
+    made = imported if version == "4.2" else imported43
+    result = server.preview_html(str(made.project_path), runtime="phaser")
+    page = Path(result["preview_path"]).read_text()
+    phaser, runtime = ("4.1.0", "4.2.120") if version == "4.2" else ("4.2.1", "4.3.13")
+    assert f"phaser@{phaser}/dist" in page and f"spine-phaser-v4@{runtime}/dist" in page
+    assert result["runtime"] == f"phaser@{phaser} + @esotericsoftware/spine-phaser-v4@{runtime}"
+    assert '"skeleton": "test_character.json"' in page and '"atlas": "test_character.atlas"' in page
+    assert "spineJson" in page and "spineSkeleton" in page  # 4.2 and 4.3 loader names
+    elsewhere = server.preview_html(str(made.project_path), runtime="phaser", out_path=str(tmp_path / "web" / "p.html"))
+    assert '"skeleton": "../' in Path(elsewhere["preview_path"]).read_text()  # paths relative to the page
+    with pytest.raises(EditError, match="runtime must be player or phaser"):
+        server.preview_html(str(made.project_path), runtime="unity")
+
+
+def test_older_43_editors_get_the_changelogs_caveats(doc, doc43):
+    from spine2d_mcp.editor_quirks import editor_caveats
+    add_animation(doc43, "idle", preset="idle")
+    con.add_constraint(doc43, "slider", "nod", bone="torso", animation="idle", property="rotate", to=1)
+    old = editor_caveats("4.3.05", doc43)
+    assert any("4.3.08 fix for importing bone-driven sliders" in c for c in old)
+    assert any("4.3.14 fix for CLI data import" in c for c in old) and old[-1] == "use Spine 4.3.26 or newer"
+    assert editor_caveats("4.3.10", doc43) == ["Spine 4.3.10 predates the 4.3.14 fix for CLI data import (it could "
+                                               "crash)", "use Spine 4.3.26 or newer"]
+    assert editor_caveats("4.3.26", doc43) == [] and editor_caveats("4.3.27", doc43) == []
+    assert "beta" in editor_caveats("4.3.39-beta", doc43)[0]
+    assert editor_caveats("4.2.43", doc) == []
+
+
+@needs_spine
+def test_import_matches_the_header_to_the_editor(imported43):
+    path = imported43.project_path
+    doc = d.load(path)
+    doc["skeleton"]["spine"] = "4.3.20"  # written for another 4.3 release
+    d.save(doc, path)
+    made = server.spine_import(str(path))
+    assert made["ok"] and not any("version" in w.lower() for w in made.get("warnings", [])), made
+    assert d.load(path)["skeleton"]["spine"] == "4.3.20"  # the file itself is untouched
+    assert not list(path.parent.glob(".*.import-*.json"))  # the copy is gone
+
+
 # ── runtimes, conversion and the editor ─────────────────────────────────────
 
 def _rich(path: str, art: Path, version: str) -> None:
