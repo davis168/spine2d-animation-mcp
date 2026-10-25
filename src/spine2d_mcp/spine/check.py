@@ -54,6 +54,9 @@ SLOT_COLOR_TIMELINES = {
 PHYSICS_TIMELINES = {"inertia", "strength", "damping", "mass", "wind", "gravity", "mix"}
 PATH_TIMELINES = {"position": 1, "spacing": 1, "mix": 3}
 SLIDER_TIMELINES = {"time", "mix"}
+PATH_MODES = {"positionMode": ("fixed", "percent"), "spacingMode": ("length", "fixed", "percent", "proportional"),
+              "rotateMode": ("tangent", "chain", "chainScale")}
+SEQUENCE_MODES = {"hold", "once", "loop", "pingpong", "onceReverse", "loopReverse", "pingpongReverse"}
 
 # Keys only the other format version reads, per constraint kind: the reader
 # ignores them, so a truthy value means the rig behaves other than written.
@@ -163,6 +166,10 @@ class _Checker:
                         "iconRotation"):
                 if key in bone and not _num(bone[key]):
                     self.error(f"{path}.{key}", "not a number")
+            if self.version == "4.2":
+                for key in ("iconSize", "iconRotation"):
+                    if key in bone:
+                        self.warn(f"{path}.{key}", "4.3 editor data: the 4.2 editor ignores it")
             self.bone_names.add(name)
 
     def _entries(self, key: str) -> None:
@@ -287,6 +294,9 @@ class _Checker:
             key = d.path_slot_key(self.doc)
             if c.get(key) not in set(self.slot_names):
                 self.error(path, f"{'target slot' if key == 'target' else 'slot'} {c.get(key)!r} not found")
+            for mode, allowed in PATH_MODES.items():
+                if mode in c and c[mode] not in allowed:
+                    self.error(f"{path}.{mode}", f"unknown {mode} {c[mode]!r} (have {', '.join(allowed)})")
             return
         key = d.target_bone_key(self.doc, kind)
         target = c.get(key)
@@ -410,12 +420,31 @@ class _Checker:
                     self.attachment(apath, skin, slot, att)
         if skins and "default" not in self.skin_names:
             self.warn("skins", "no 'default' skin: slots show nothing until a skin is set at runtime")
+        listed = {n for skin in skins if isinstance(skin, dict) for key in ("bones", *d.CONSTRAINT_KINDS)
+                  for n in skin.get(key) or [] if isinstance(n, str)}
+        for i, bone in enumerate(d.bones(self.doc)):
+            if bone.get("skin") and bone.get("name") not in listed:
+                self.warn(f"bones[{bone.get('name')}]", "a skin bone no skin lists: it is never active")
+        for kind, c in d.all_constraints(self.doc):
+            if c.get("skin") and c.get("name") not in listed:
+                self.warn(f"{kind}[{c.get('name')}]", "a skin constraint no skin lists: it never applies")
 
     def attachment(self, path: str, skin: dict, slot: str, att: dict) -> None:
         kind = att.get("type", "region")
         if kind not in ATTACHMENT_TYPES:
             self.error(path, f"unknown attachment type {kind!r}")
             return
+        if "sequence" in att:
+            if kind in ("region", "mesh", "linkedmesh"):
+                self.sequence(f"{path}.sequence", att["sequence"])
+            else:
+                self.warn(f"{path}.sequence", f"a {kind} attachment has no sequence: the reader ignores it")
+        if kind == "point":
+            for key in ("x", "y", "rotation"):
+                if key in att and not _num(att[key]):
+                    self.error(f"{path}.{key}", "not a number")
+        if kind == "linkedmesh" and not isinstance(att.get("timelines", True), bool):
+            self.error(f"{path}.timelines", "must be true or false")
         if kind == "region":
             for key in ("width", "height"):
                 if not _num(att.get(key)):
@@ -491,7 +520,23 @@ class _Checker:
         hull = att.get("hull")
         if hull is not None and (not isinstance(hull, int) or hull > count):
             self.error(path, f"hull {hull} larger than the {count} vertices")
+        elif isinstance(hull, int) and hull < 3:
+            self.warn(path, f"hull of {hull} vertices: a mesh border needs at least 3")
+        edges = att.get("edges")
+        if edges is not None and (not isinstance(edges, list) or len(edges) % 2
+                                  or any(not isinstance(e, int) or e % 2 or not 0 <= e // 2 < count for e in edges)):
+            self.warn(f"{path}.edges", "edges must be pairs of vertex indices times 2 (editor data)")
         self.vertices(path, att, count)
+
+    def sequence(self, path: str, seq) -> None:
+        if not isinstance(seq, dict) or not isinstance(seq.get("count"), int) or seq["count"] < 1:
+            self.error(path, "needs a count of 1 or more (the reader requires it)")
+            return
+        for key in ("start", "digits", "setup"):
+            if key in seq and (not isinstance(seq[key], int) or seq[key] < 0):
+                self.error(f"{path}.{key}", "must be a whole number, 0 or more")
+        if isinstance(seq.get("setup", 0), int) and seq.get("setup", 0) >= seq["count"]:
+            self.error(f"{path}.setup", f"must be below count ({seq['count']})")
 
     def vertices(self, path: str, att: dict, count) -> None:
         vertices = att.get("vertices")
@@ -503,10 +548,11 @@ class _Checker:
         bone_count = len(d.bones(self.doc))
         i, seen = 0, 0
         while i < len(vertices) and seen < count:
-            n = vertices[i]
-            if not isinstance(n, int) or n < 1:
+            n = vertices[i]  # the editor writes counts and bone indices as floats (2.0) in 4.3
+            if not _whole(n) or n < 1:
                 self.error(path, f"weighted vertex {seen}: bad influence count {n!r}")
                 return
+            n = int(n)
             total = 0.0
             for j in range(n):
                 k = i + 1 + j * 4
@@ -514,7 +560,7 @@ class _Checker:
                     self.error(path, "weighted vertices end mid-record")
                     return
                 bone_index, weight = vertices[k], vertices[k + 3]
-                if not isinstance(bone_index, int) or not 0 <= bone_index < bone_count:
+                if not _whole(bone_index) or not 0 <= bone_index < bone_count:
                     self.error(path, f"weighted vertex {seen}: bone index {bone_index!r} out of range")
                 total += weight if _num(weight) else 0
             if abs(total - 1) > 0.01:
@@ -538,6 +584,17 @@ class _Checker:
         for name, value in events.items():
             if not isinstance(value, dict):
                 self.error(f"events.{name}", "must be an object of defaults ({} for none)")
+                continue
+            if "int" in value and not _whole(value["int"]):
+                self.error(f"events.{name}.int", "must be a whole number")
+            for key in ("float", "volume", "balance"):
+                if key in value and not _num(value[key]):
+                    self.error(f"events.{name}.{key}", "not a number")
+            for key in ("string", "audio"):
+                if key in value and not isinstance(value[key], str):
+                    self.error(f"events.{name}.{key}", "must be text")
+            if ("volume" in value or "balance" in value) and "audio" not in value:
+                self.warn(f"events.{name}", "volume and balance are read only with audio")
         self.event_names = set(events)
 
     # ── animations ───────────────────────────────────────────────────────────
@@ -687,7 +744,13 @@ class _Checker:
                         self.error(apath, "attachment not found in that skin and slot")
                         continue
                     for tname, keys in (self._obj(apath, timelines) or {}).items():
-                        if not self.keys(f"{apath}.{tname}", keys) or tname != "deform":
+                        if not self.keys(f"{apath}.{tname}", keys):
+                            continue
+                        if tname == "sequence":
+                            self.sequence_keys(f"{apath}.sequence", att, keys)
+                            continue
+                        if tname != "deform":
+                            self.warn(f"{apath}.{tname}", "unknown attachment timeline: the reader skips it")
                             continue
                         if att.get("type") not in ("mesh", "linkedmesh", "boundingbox", "path", "clipping"):
                             self.error(apath, "deform keys on an attachment without vertices")
@@ -698,6 +761,23 @@ class _Checker:
                             offset, verts = k.get("offset", 0), k.get("vertices") or []
                             if length is not None and offset + len(verts) > length:
                                 self.error(f"{apath}.deform[{i}]", f"offset + vertices = {offset + len(verts)} exceeds {length}")
+
+    def sequence_keys(self, path: str, att: dict, keys: list) -> None:
+        kind = att.get("type", "region")
+        if kind not in ("region", "mesh", "linkedmesh"):
+            self.error(path, f"sequence keys on a {kind} attachment, which has no images (the reader fails)")
+            return
+        if not isinstance(att.get("sequence"), dict):
+            self.warn(path, "the attachment has no sequence, so these keys change nothing")
+        count = (att.get("sequence") or {}).get("count") if isinstance(att.get("sequence"), dict) else None
+        for i, k in enumerate(keys):
+            if k.get("mode", "hold") not in SEQUENCE_MODES:
+                self.error(f"{path}[{i}].mode", f"unknown mode {k.get('mode')!r} (have {', '.join(sorted(SEQUENCE_MODES))})")
+            index = k.get("index", 0)
+            if not isinstance(index, int) or index < 0 or (isinstance(count, int) and index >= count):
+                self.error(f"{path}[{i}].index", f"must be an image number 0..{count - 1 if count else 'count-1'}")
+            if "delay" in k and (not _num(k["delay"]) or k["delay"] < 0):
+                self.error(f"{path}[{i}].delay", "must be seconds, 0 or more")
 
     def draw_order(self, path: str, keys, order: list[str]) -> None:
         """The reader walks offsets in slot order: they must name slots in
@@ -839,6 +919,10 @@ class _Checker:
 
 def _num(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _whole(value) -> bool:
+    return _num(value) and value == int(value)
 
 
 def _deform_length(att: dict) -> int | None:

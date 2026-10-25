@@ -24,19 +24,21 @@ try {
   const pkg = JSON.parse(readFileSync(path.join(path.dirname(entry), "..", "package.json"), "utf8"));
   report.runtime = `spine-core ${pkg.version}`;
 
-  // 4.3 split bones and slots into poses and renamed the setup/apply calls.
-  const v43 = typeof spine.MixFrom !== "undefined";
+  const atlas = new spine.TextureAtlas(readFileSync(atlasPath, "utf8"));
+  const reader = new spine.SkeletonJson(new spine.AtlasAttachmentLoader(atlas));
+  const data = reader.readSkeletonData(readFileSync(jsonPath, "utf8"));
+
+  // 4.3 split bones and slots into poses and renamed the setup/apply calls;
+  // 4.3.6 replaced apply's fromSetup flag with MixFrom.
+  const v43 = Array.isArray(data.constraints);
+  const fromSetup = typeof spine.MixFrom !== "undefined" ? spine.MixFrom.setup : true;
   const setupPose = (sk) => (v43 ? sk.setupPose() : sk.setToSetupPose());
   const pose = (bone) => (v43 ? bone.appliedPose : bone);
   const attachment = (slot) => (v43 ? slot.appliedPose.attachment : slot.getAttachment());
   const apply = (animation, sk, last, time, events) =>
     v43
-      ? animation.apply(sk, last, time, false, events, 1, spine.MixFrom.setup, false, false, false)
+      ? animation.apply(sk, last, time, false, events, 1, fromSetup, false, false, false)
       : animation.apply(sk, last, time, false, events, 1, spine.MixBlend.setup, spine.MixDirection.mixIn);
-
-  const atlas = new spine.TextureAtlas(readFileSync(atlasPath, "utf8"));
-  const reader = new spine.SkeletonJson(new spine.AtlasAttachmentLoader(atlas));
-  const data = reader.readSkeletonData(readFileSync(jsonPath, "utf8"));
   report.version = data.version;
   report.bones = data.bones.length;
   report.slots = data.slots.length;
@@ -128,6 +130,37 @@ try {
     if (!finite) report.errors.push(`${animation.name}: non-finite bone transforms`);
   }
   if (report.poses) report.bone_names = skeleton.bones.map((b) => b.data.name);
+
+  // Each skin: its setup attachments, and every animation sampled with it,
+  // so skin attachments, skin bones and skin constraints are played too.
+  if (!poses && data.skins.length > 1) {
+    report.skins = [];
+    for (const skin of data.skins) {
+      skeleton.setSkinByName(skin.name);
+      setupPose(skeleton);
+      skeleton.updateWorldTransform(spine.Physics.update);
+      const skinMissing = skeleton.slots
+        .filter((s) => s.data.attachmentName && !attachment(s))
+        .map((s) => `${s.data.name}: ${s.data.attachmentName}`);
+      let skinFinite = true, skinTravel = 0;
+      for (const animation of data.animations) {
+        for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+          setupPose(skeleton);
+          apply(animation, skeleton, 0, animation.duration * f, []);
+          skeleton.updateWorldTransform(spine.Physics.none);
+          skeleton.bones.forEach((b, j) => {
+            const p = pose(b);
+            if (![p.a, p.b, p.c, p.d, p.worldX, p.worldY].every(Number.isFinite)) skinFinite = false;
+            skinTravel = Math.max(skinTravel, Math.hypot(p.worldX - setup[j][0], p.worldY - setup[j][1]));
+          });
+        }
+      }
+      report.skins.push({ name: skin.name, missing: skinMissing, finite: skinFinite,
+        max_bone_travel: Number(skinTravel.toFixed(2)) });
+      if (skinMissing.length) report.errors.push(`skin ${skin.name}: setup attachments not found: ${skinMissing.join(", ")}`);
+      if (!skinFinite) report.errors.push(`skin ${skin.name}: non-finite bone transforms`);
+    }
+  }
 } catch (e) {
   report.errors.push(String(e && e.message ? e.message : e));
 }

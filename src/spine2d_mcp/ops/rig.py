@@ -1,4 +1,5 @@
-"""Edit a rig's setup pose: bones, pivots, slots and draw order.
+"""Edit a rig's setup pose: bones, pivots, slots, draw order and event
+definitions.
 
 Each operation is a dict with an "op" key, applied in order (see `edit_rig`).
 Operations that would move art keep it in place where the docstring says so:
@@ -11,12 +12,18 @@ from __future__ import annotations
 
 from ..edits import EditError
 from ..spine import document as d
+from ..spine import versions
 from .animation import keep_draw_order_keys
 
-_BONE_FIELDS = ("x", "y", "rotation", "scaleX", "scaleY", "shearX", "shearY", "length", "inherit", "color")
+# icon, iconSize, iconRotation and visible are how the editor shows a bone
+# (nonessential data); iconSize and iconRotation are 4.3 only.
+_BONE_FIELDS = ("x", "y", "rotation", "scaleX", "scaleY", "shearX", "shearY", "length", "inherit", "color",
+                "icon", "iconSize", "iconRotation", "visible")
 _BONE_DEFAULTS = {"x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1, "shearX": 0, "shearY": 0,
-                  "length": 0, "inherit": "normal"}
-_SLOT_FIELDS = ("attachment", "color", "dark", "blend")
+                  "length": 0, "inherit": "normal", "iconSize": 1, "iconRotation": 0, "visible": True}
+_ONLY_43 = ("iconSize", "iconRotation")
+_SLOT_FIELDS = ("attachment", "color", "dark", "blend", "visible")
+_SLOT_DEFAULTS = {"blend": "normal", "visible": True}
 _VERTEX_TYPES = ("mesh", "boundingbox", "clipping", "path")
 
 
@@ -34,7 +41,11 @@ def _slot(doc: dict, name: str) -> dict:
     return slot
 
 
-def _set_fields(target: dict, fields: dict, allowed, defaults) -> None:
+def _set_fields(target: dict, fields: dict, allowed, defaults, doc: dict | None = None) -> None:
+    if doc is not None and versions.layout(doc) == "4.2":
+        for key in _ONLY_43:
+            if fields.get(key, _BONE_DEFAULTS[key]) != _BONE_DEFAULTS[key]:
+                raise EditError(f"{key} needs format version 4.3; this skeleton is 4.2")
     for key, value in fields.items():
         if key not in allowed:
             raise EditError(f"cannot set {key!r} (settable: {', '.join(allowed)})")
@@ -84,7 +95,7 @@ def _is_weighted(att: dict) -> bool:
     return isinstance(count, int) and len(att.get("vertices") or []) != count * 2
 
 
-def _weighted_influences(att: dict):
+def weighted_influences(att: dict):
     """Yield the index into `vertices` of each influence's bone index."""
     vertices, i = att["vertices"], 0
     while i < len(vertices):
@@ -102,7 +113,7 @@ def _reorder_bones(doc: dict, order: list[str]) -> None:
     remap = {i: new_index[name] for i, name in enumerate(old) if name in new_index}
     for _, att in _vertex_attachments(doc):
         if att.get("type") in _VERTEX_TYPES and "vertices" in att and _is_weighted(att):
-            for k in _weighted_influences(att):
+            for k in weighted_influences(att):
                 index = int(att["vertices"][k])
                 if index not in remap:
                     raise EditError(f"a weighted mesh uses bone {old[index]!r}, which this change removes")
@@ -134,7 +145,7 @@ def add_bone(doc: dict, name: str, parent: str, world: bool = False, **fields) -
         wx, wy = fields.pop("x", 0.0), fields.pop("y", 0.0)
         p = d.world_transforms(doc)[parent]
         fields["x"], fields["y"] = (round(v, 4) for v in p.inverse_vector(wx - p.x, wy - p.y))
-    _set_fields(bone, fields, _BONE_FIELDS, _BONE_DEFAULTS)
+    _set_fields(bone, fields, _BONE_FIELDS, _BONE_DEFAULTS, doc)
     # Insert after the parent's subtree, so the list still reads as a hierarchy.
     order = [b["name"] for b in d.bones(doc)]
     subtree = [parent, *_descendants(doc, parent)]
@@ -149,7 +160,7 @@ def set_bone(doc: dict, name: str, parent: str | None = None, **fields) -> dict:
     bone = _bone(doc, name)
     if parent is not None and parent != bone.get("parent"):
         _reparent(doc, name, parent)
-    _set_fields(bone, fields, _BONE_FIELDS, _BONE_DEFAULTS)
+    _set_fields(bone, fields, _BONE_FIELDS, _BONE_DEFAULTS, doc)
     return {"op": "set_bone", "bone": name, **({"parent": parent} if parent else {}), **fields}
 
 
@@ -204,7 +215,7 @@ def move_pivot(doc: dict, name: str, x: float = 0.0, y: float = 0.0, to: list[fl
             att["y"] = round(att.get("y", 0) - by, 4)
         elif kind in _VERTEX_TYPES and "vertices" in att:
             if _is_weighted(att):
-                for k in _weighted_influences(att):
+                for k in weighted_influences(att):
                     if int(att["vertices"][k]) == bone_index:
                         att["vertices"][k + 1] = round(att["vertices"][k + 1] - bx, 4)
                         att["vertices"][k + 2] = round(att["vertices"][k + 2] - by, 4)
@@ -298,7 +309,7 @@ def add_slot(doc: dict, name: str, bone: str, attachment: str | None = None, ind
     _bone(doc, bone)
     before = _slot_names(doc)
     slot = {"name": name, "bone": bone}
-    _set_fields(slot, {"attachment": attachment, **fields}, _SLOT_FIELDS, {"blend": "normal"})
+    _set_fields(slot, {"attachment": attachment, **fields}, _SLOT_FIELDS, _SLOT_DEFAULTS)
     at = len(before) if index is None else index
     _keep_folders_together(before, before[:at] + [name] + before[at:])
     slots = doc.setdefault("slots", [])
@@ -311,7 +322,7 @@ def set_slot(doc: dict, name: str, bone: str | None = None, **fields) -> dict:
     slot = _slot(doc, name)
     if bone is not None and bone != slot.get("bone"):
         _rebind_slot(doc, name, bone)
-    _set_fields(slot, fields, _SLOT_FIELDS, {"blend": "normal"})
+    _set_fields(slot, fields, _SLOT_FIELDS, _SLOT_DEFAULTS)
     return {"op": "set_slot", "slot": name, **({"bone": bone} if bone else {}), **fields}
 
 
@@ -471,7 +482,42 @@ def set_draw_order(doc: dict, order: list[str] | None = None, slot: str | None =
     return {"op": "set_draw_order", "order": order, **_kept_keys(doc, names)}
 
 
+_EVENT_DEFAULTS = {"int": 0, "float": 0, "string": "", "audio": None, "volume": 1, "balance": 0}
+
+
+def set_event(doc: dict, name: str, **fields) -> dict:
+    """Define an event or change its defaults (int, float, string) and its
+    sound (audio: a path in the skeleton's audio folder, volume 0..1,
+    balance -1..1); keys of the event carry these unless they override them."""
+    if not isinstance(name, str) or not name:
+        raise EditError("an event needs a name")
+    unknown = [k for k in fields if k not in _EVENT_DEFAULTS]
+    if unknown:
+        raise EditError(f"events have no {', '.join(map(repr, unknown))} (have {', '.join(_EVENT_DEFAULTS)})")
+    event = doc.setdefault("events", {}).setdefault(name, {})
+    _set_fields(event, fields, tuple(_EVENT_DEFAULTS), _EVENT_DEFAULTS)
+    if "audio" not in event:
+        for key in ("volume", "balance"):
+            if key in event:
+                raise EditError(f"{key} needs audio (the runtime reads it only for events with a sound)")
+    return {"op": "set_event", "event": name, **event}
+
+
+def remove_event(doc: dict, name: str) -> dict:
+    if name not in (doc.get("events") or {}):
+        raise EditError(f"no event {name!r}")
+    keyed = [a for a, anim in (doc.get("animations") or {}).items()
+             if any(k.get("name") == name for k in (anim or {}).get("events") or [])]
+    if keyed:
+        raise EditError(f"event {name!r} is keyed in {', '.join(keyed)}; remove those keys first")
+    del doc["events"][name]
+    if not doc["events"]:
+        del doc["events"]
+    return {"op": "remove_event", "event": name}
+
+
 _OPS = {
+    "set_event": set_event, "remove_event": remove_event,
     "add_bone": add_bone, "set_bone": set_bone, "move_pivot": move_pivot, "rename_bone": rename_bone,
     "remove_bone": remove_bone, "add_slot": add_slot, "set_slot": set_slot, "rename_slot": rename_slot,
     "rename_folder": rename_folder, "remove_slot": remove_slot, "set_draw_order": set_draw_order,

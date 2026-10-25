@@ -16,11 +16,15 @@ The Spine editor has no live scripting API, so the server works on the files (sk
 |---|---|
 | `import_psd_to_spine` | Layered PSD → skeleton JSON, atlas, page PNG(s) and per-part images |
 | `inspect_skeleton` | Bones (setup and world positions), slots in draw order, skins, constraints, events, and what each animation keys |
-| `validate_skeleton` | Format check against the file's version, plus whether it matches the game project's; `runtime=true` also loads and plays it in that version's spine-core |
+| `validate_skeleton` | Format check against the file's version, plus whether it matches the game project's; `runtime=true` also loads and plays it, with every skin, in spine-core (the game's installed release, else that version's tested one) |
 | `add_animation` / `remove_animation` | Presets (idle, walk, wave, jump) or keyframes with an easing shorthand; preset + keyframe overrides |
-| `edit_rig` | Add/set/rename/remove bones, move a pivot without moving the art, reparent, add/set/rename/remove slots, draw order folders, draw order (draw order keys keep showing the same order) |
-| `add_constraint` / `remove_constraint` | IK, transform, physics and (4.3) slider constraints (physics presets: hair, cloth, tail, antenna, jiggle) |
-| `add_attachment` | Add a PNG as a region attachment on a slot (mouth shapes, alternate hands) and repack the atlas |
+| `edit_rig` | Add/set/rename/remove bones (with their editor icon and visibility), move a pivot without moving the art, reparent, add/set/rename/remove slots, draw order folders, draw order (draw order keys keep showing the same order), event defaults and sounds |
+| `add_constraint` / `remove_constraint` | IK, transform, path, physics and (4.3) slider constraints (physics presets: hair, cloth, tail, antenna, jiggle) |
+| `add_attachment` | Add a PNG (or an image sequence) as a region attachment on a slot (mouth shapes, alternate hands, flames) and repack the atlas |
+| `add_mesh` | A mesh: a region turned into a mesh in place, a grid mesh from a PNG, or a linked mesh (another image on a mesh, in 4.3 also from another slot); bound to bones with automatic weights if asked |
+| `set_weights` | Bind a mesh's vertices to bones (automatic or per-vertex weights), or unbind them, keeping them in place |
+| `add_shape` | A bounding box (hit area), point (muzzle, effect origin) or Bezier path (for path constraints) |
+| `edit_skin` | Add, copy, rename and remove skins; skin bones and constraints, active only with their skin |
 | `add_clipping` | A clipping polygon (mask) on a slot, clipping the slots drawn after it up to `end`; (4.3) convex and inverse |
 | `set_draw_order_keys` | An animation's draw order keys by back-to-front slot order: the whole skeleton's, or (4.3) one draw order folder's |
 | `pack_atlas` | Repack the atlas from the images folder |
@@ -64,11 +68,18 @@ Presets are tuned for importer rigs and scale with the skeleton's height: `idle`
 
 A draw order key may give `"order"` (every slot, back to front) instead of the offsets Spine stores. As in the editor, a **draw order folder** is the slots whose names share a prefix (`face/eye`, `face/mouth`; nested: `face/brows/left`), kept next to each other in the draw order: `edit_rig` `rename_slot` (`head` → `face/head`) and `rename_folder` manage them. In 4.3 a draw order folder can have its own draw order keys (`set_draw_order_keys` with `folder`, or `drawOrderFolder` in `add_animation`), which reorder only its slots, over the whole draw order's keys. Converting to 4.2 folds them into whole draw order keys that show the same orders.
 
+### Meshes, shapes, sequences and skins
+
+- **Meshes** are grids (cells of about 48 px unless `grid` says otherwise) with the hull and edges the editor shows. Turning a region into a mesh keeps its name, image and placement, so its keys keep working. `bones` binds the vertices with automatic weights (inverse squared distance to each bone, at most 4 bones per vertex), a starting point for bending limbs; `weights` sets them exactly. Deform keys go in `add_animation` under `attachments`.
+- **Linked meshes** reuse a mesh's vertices and weights with another image, typically in another skin; with `timelines` they play the source's deform keys.
+- **Paths** get smooth handles unless given, and the curve lengths the runtime reads; `add_constraint` `type="path"` moves bones along them.
+- **Image sequences** (`frames`) are stored as `<name>_01`, `<name>_02`, ... and played with sequence keys.
+- **Skins** can own bones and constraints (a cape's bones and physics only in the "caped" skin); the runtime check plays every skin.
+
 ### Limits
 
 - **IK** aims a bone's x axis at the target, so it suits rigs whose bones point along their limbs. Importer rigs have unrotated bones; `add_constraint` warns when the setup pose would swing. Aim importer limbs with rotate keys.
-- **Path constraints** are preserved and checked but cannot be added (they need path attachments).
-- **4.3 extras the tools keep and check but do not create**: linked meshes whose source mesh is in another slot.
+- **Automatic weights** follow distance only, not the image's shape; check bends in the preview and adjust with `weights` where needed.
 - **What the Spine 4.3 editor (4.3.26) changes when it imports JSON**: every clip comes in convex and none inverse (it does not read either flag), and a nested draw order folder's draw order keys are dropped; the runtime reads all of them. `add_clipping`, `set_draw_order_keys` and `spine_import` say when this applies.
 - `move_pivot`, reparenting and slot rebinding work in world space and require `inherit: normal` along the chain.
 
@@ -80,6 +91,8 @@ A Spine runtime loads only skeleton data of its own **format version** (the majo
 |---|---|---|---|
 | 4.2 | 4.2.43 | 4.2.120 | `@esotericsoftware/spine-phaser-v4@v4.2-latest` (Phaser ≥ 4.1) |
 | 4.3 | 4.3.26 | 4.3.13 | `@esotericsoftware/spine-phaser-v4@latest` (Phaser ≥ 4.2.1) |
+
+Every 4.3 runtime release (spine-core 4.3.0 to 4.3.13) loads and plays the files the tools write; `validate_skeleton` plays a file in the game project's installed release when it has one.
 
 - **Existing files** are edited, checked, previewed and run in their own version.
 - **New files** (`import_psd_to_spine`, data exported from a `.spine` project) take, in order: the `format_version` you pass; the **game project's version**, found by searching up from the output folder to the repository root for a `package.json` with an `@esotericsoftware/spine-*` dependency (the installed release first, else a range that pins one version: `~4.2.0` counts, `^4.2.0` does not, since a fresh install of it gets 4.3) or a `.spine-version` file holding e.g. `4.3`; then `$SPINE_FORMAT_VERSION`.
@@ -139,7 +152,7 @@ src/spine2d_mcp/
   preview.py           Spine Web Player page
   spine_cli.py         Spine editor CLI: import, export, project info
   runtime/             spine-core runtime check and pose comparison (Node script + wrapper)
-  ops/                 edits as pure functions: animation, rig, constraints, attachments
+  ops/                 edits as pure functions: animation, rig, constraints, attachments, meshes, shapes, skins
   psd/parser.py        PSD -> flat layer list (+ pivot markers)
   psd/conventions.py   bone hierarchy, joint sides, cap pivots, [pivot] tag
   spine/schema.py      Pydantic models the importer builds with

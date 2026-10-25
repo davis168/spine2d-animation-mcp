@@ -25,6 +25,9 @@ def inspect(doc: dict) -> dict:
                 entry[key] = _r(b[key])
         if b.get("inherit", "normal") != "normal":
             entry["inherit"] = b["inherit"]
+        for key in ("skin", "icon", "iconSize", "iconRotation", "visible"):
+            if key in b:
+                entry[key] = b[key]
         entry["world"] = [_r(w.x), _r(w.y)]
         bones.append(entry)
 
@@ -43,16 +46,21 @@ def inspect(doc: dict) -> dict:
             atts[slot] = {}
             for name, att in (named or {}).items():
                 info = {"type": att.get("type", "region")}
-                for key in ("path", "width", "height", "x", "y", "rotation", "parent", "source", "slot", "end",
-                            "convex", "inverse"):
+                for key in ("path", "width", "height", "x", "y", "rotation", "parent", "source", "skin", "slot",
+                            "timelines", "end", "convex", "inverse", "closed", "constantSpeed", "sequence"):
                     if key in att:
                         number = isinstance(att[key], (int, float)) and not isinstance(att[key], bool)
                         info[key] = _r(att[key]) if number else att[key]
-                if "uvs" in att:
-                    info["vertices"] = len(att["uvs"]) // 2
-                    info["weighted"] = len(att.get("vertices") or []) != len(att["uvs"])
+                count = len(att["uvs"]) // 2 if "uvs" in att else att.get("vertexCount")
+                if isinstance(count, int):
+                    info["vertices"] = count
+                    info["weighted"] = len(att.get("vertices") or []) != 2 * count
                 atts[slot][name] = info
-        skins.append({"name": skin.get("name"), "attachments": atts})
+        entry = {"name": skin.get("name"), "attachments": atts}
+        for key in ("bones", *d.CONSTRAINT_KINDS):
+            if skin.get(key):
+                entry[key] = skin[key]
+        skins.append(entry)
 
     # In apply order; `target` is the bone an IK or transform constraint
     # follows, whatever the version calls it (4.3 transform: `source`).

@@ -12,7 +12,7 @@ convex/inverse, cross-slot linked meshes) is a loss: the conversion refuses,
 listing each one, unless `allow_lossy` is passed, in which case exactly those
 parts are dropped. Draw order folder keys are folded into whole draw order
 keys, which show the same orders. Editor-only display data (bone icon size
-and rotation) is dropped without counting as a loss.
+and rotation, animation colours) is dropped without counting as a loss.
 
 Defaults that changed between the versions are written out explicitly, so
 every value reads back the same: physics inertia (4.2: 1, 4.3: 0.5) and
@@ -291,6 +291,9 @@ def _convert_43_to_42(out: Conversion, allow_lossy: bool) -> None:
             if key in bone:
                 bone.pop(key)
                 out.dropped_editor_data.append(f"bone {bone.get('name')!r} {key}")
+    for anim_name, anim in (doc.get("animations") or {}).items():
+        if isinstance(anim, dict) and anim.pop("color", None) is not None:
+            out.dropped_editor_data.append(f"animation {anim_name!r} color")
 
 
 def _transform_down(c: dict, name: str, losses: list[str]) -> list[str]:

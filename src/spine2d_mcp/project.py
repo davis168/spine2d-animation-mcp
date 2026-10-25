@@ -63,6 +63,7 @@ class Signal:
     problem: str | None = None
     candidates: list[str] | None = None  # format versions an unclear range allows, when bounded
     settleable: bool = True  # a declaration may settle it (an open range, not contradicting packages)
+    release: str | None = None  # the runtime release installed, when every Spine package has the same one
 
 
 @dataclass
@@ -76,6 +77,7 @@ class ProjectVersion:
     candidates: list[str] | None = None  # the versions in question, when unclear
     package_version: str | None = None  # what package.json clearly says, if anything
     declaration_path: Path | None = None  # the nearest .spine-version, if any
+    runtime_release: str | None = None  # the installed Spine runtime release (e.g. 4.3.5), if one
 
     @property
     def unclear(self) -> bool:
@@ -174,8 +176,10 @@ def _read_package(folder: Path, dirs: list[Path]) -> Signal | None:
     if not deps:
         return None
     found: list[tuple[str, str | None, str, list[str] | None]] = []  # (package, version, description, candidates)
+    releases = set()
     for name, spec in sorted(deps.items()):
         installed = _installed(folder, dirs, name)
+        releases.add(installed)
         if installed:
             found.append((name, versions.major_minor(installed), f"{name} {installed} installed", None))
             continue
@@ -194,7 +198,8 @@ def _read_package(folder: Path, dirs: list[Path]) -> Signal | None:
     if len(formats) > 1:
         return Signal(source, None, f"{_display(path)} has Spine packages on different format versions "
                                     f"({', '.join(desc for _, _, desc, _ in found)})", formats, settleable=False)
-    return Signal(source, formats[0])
+    release = next(iter(releases)) if len(releases) == 1 else None  # spine-ts packages share releases
+    return Signal(source, formats[0], release=release)
 
 
 def _installed(folder: Path, dirs: list[Path], name: str) -> str | None:
@@ -214,7 +219,8 @@ def _installed(folder: Path, dirs: list[Path], name: str) -> str | None:
 def _combine(start: Path, repo_root: Path | None, package: Signal | None, declaration: Signal | None) -> ProjectVersion:
     signals = [s for s in (package, declaration) if s is not None]
     project = ProjectVersion(None, None, repo_root, start, signals,
-                             package_version=package.version if package else None)
+                             package_version=package.version if package else None,
+                             runtime_release=package.release if package else None)
     if not signals:
         return project
     if declaration is not None and declaration.version is None:

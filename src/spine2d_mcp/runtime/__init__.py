@@ -58,16 +58,20 @@ def _file_version(project_path: Path) -> tuple[str | None, str | None]:
     return version, None
 
 
-def _run(project_path: Path, atlas_path: Path, poses: bool) -> dict:
+def _run(project_path: Path, atlas_path: Path, poses: bool, release: str | None = None) -> dict:
+    """`release` picks a spine-core release of the file's format version
+    (default the one the tools are tested with)."""
     if not atlas_path.is_file():
         return {"ran": False, "reason": f"no atlas at {atlas_path}"}
     version, reason = _file_version(project_path)
     if version is None:
         return {"ran": False, "reason": reason}
+    if release is not None and versions.major_minor(release) != version:
+        return {"ran": False, "reason": f"spine-core {release} cannot load a {version} file"}
     node = shutil.which("node")
     if node is None:
         return {"ran": False, "reason": "node not found"}
-    core, reason = _ensure_core(versions.get(version).runtime)
+    core, reason = _ensure_core(release or versions.get(version).runtime)
     if core is None:
         return {"ran": False, "reason": reason}
     args = [node, str(_SCRIPT), str(project_path), str(atlas_path), str(core)] + (["--poses"] if poses else [])
@@ -82,11 +86,11 @@ def _run(project_path: Path, atlas_path: Path, poses: bool) -> dict:
     return {"ran": True, "ok": not result.get("errors"), **result}
 
 
-def runtime_check(project_path: str | Path, atlas_path: str | Path | None = None) -> dict:
+def runtime_check(project_path: str | Path, atlas_path: str | Path | None = None, release: str | None = None) -> dict:
     """{"ran": bool, ...}: the runtime's load and per-animation results, or why it was skipped."""
     project_path = Path(project_path)
     atlas_path = Path(atlas_path) if atlas_path else default_atlas(project_path)
-    return _run(project_path, atlas_path, poses=False)
+    return _run(project_path, atlas_path, poses=False, release=release)
 
 
 def compare_poses(original: str | Path, converted: str | Path, atlas_path: str | Path,

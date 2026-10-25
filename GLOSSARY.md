@@ -64,6 +64,22 @@ _Avoid_: Z-order, layer order
 A named group of slots that sit next to each other in the draw order, which can itself hold draw order folders; in 4.3 an animation can key the order of one draw order folder's slots on their own.
 _Avoid_: Slot folder, slot group, layer folder, folder (unqualified: skins and animations have folders too)
 
+**Mesh**:
+An attachment whose image is stretched over a set of vertices, so it can bend with bones or be reshaped by deform keys.
+_Avoid_: Mesh region, polygon (for this)
+
+**Weights**:
+How strongly each bone moves each vertex of a mesh; a weighted mesh bends with several bones.
+_Avoid_: Skinning (for this), binding strength
+
+**Linked mesh**:
+A mesh that reuses another mesh's vertices and weights with a different image.
+_Avoid_: Mesh copy, child mesh
+
+**Skin bone**:
+A bone (or, likewise, a constraint) that is active only while a skin that lists it is the current skin.
+_Avoid_: Optional bone, skin-only bone
+
 **Clipping attachment**:
 A polygon on a slot that clips the slots drawn after it, up to an end slot; it can be inverse (hiding what is inside instead) in 4.3.
 _Avoid_: Mask (in code), clip path

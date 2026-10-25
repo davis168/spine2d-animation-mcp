@@ -11,11 +11,14 @@ from mcp.server.fastmcp import FastMCP
 from . import project as proj
 from . import spine_cli
 from .conversion import convert_file
-from .edits import edit_skeleton, report
+from .edits import EditError, edit_skeleton, report
 from .ops import animation as anim_ops
 from .ops import attachments as att_ops
 from .ops import constraints as con_ops
+from .ops import meshes as mesh_ops
 from .ops import rig as rig_ops
+from .ops import shapes as shape_ops
+from .ops import skins as skin_ops
 from .pipeline import import_psd_to_spine as _import
 from .preview import player_version
 from .preview import preview_html as _preview
@@ -136,9 +139,10 @@ def validate_skeleton(
     version reads, and whether its version matches the game project's. Errors
     break loading or render wrongly; warnings are probably unintended.
 
-    With runtime=true it also loads the skeleton and atlas in the spine-core
-    release of its format version (4.2.120 or 4.3.13) via Node and steps every
-    animation; spine-core is installed into a cache on first use.
+    With runtime=true it also loads the skeleton and atlas in spine-core via
+    Node and steps every animation: the release the game project has
+    installed, else the tested release of the file's format version (4.2.120
+    or 4.3.13); spine-core is installed into a cache on first use.
 
     Args:
         project_path: Absolute path to the skeleton .json.
@@ -159,7 +163,11 @@ def validate_skeleton(
         result["warnings"].append(f"WARNING game project: its format version is unclear: {game.problem}")
     ok = not result["errors"]
     if runtime:
-        result["runtime"] = runtime_check(project_path, atlas_path)
+        # The game's own spine-core release when it has one installed for this format version.
+        release = game.runtime_release if versions.major_minor(game.runtime_release or "") == version else None
+        result["runtime"] = runtime_check(project_path, atlas_path, release)
+        if release:
+            result["runtime"]["release_from"] = "the game project's installed runtime"
         ok = ok and result["runtime"].get("ok", True)
     return {"ok": ok, **result}
 
@@ -269,15 +277,16 @@ def edit_rig(project_path: str, operations: list[dict], out_path: str | None = N
 
     Operations ("op" plus its fields; x/y in skeleton units, y up, degrees CCW):
     - add_bone: name, parent, x, y [, rotation, scaleX, scaleY, shearX, shearY,
-      length, inherit, color, world=true to give x/y in world space]
+      length, inherit, color, icon, visible, iconSize and iconRotation (4.3),
+      world=true to give x/y in world space]
     - set_bone: name [, parent (keeps the world position), x, y, rotation, ...]
     - move_pivot: name, x, y (world-space delta) or to=[x, y] (world point);
       the bone's art, children and weighted vertices stay where they are
     - rename_bone: name, to (updates slots, constraints, animations)
     - remove_bone: name (only if no children, slots or constraints use it)
-    - add_slot: name, bone [, attachment, index, color, dark, blend]
+    - add_slot: name, bone [, attachment, index, color, dark, blend, visible]
     - set_slot: name [, bone (keeps attachments in place), attachment, color,
-      dark, blend]
+      dark, blend, visible]
     - rename_slot: name, to (updates skins, constraints, clips, animations);
       a "/" puts the slot in a draw order folder (head -> face/head), whose slots
       stay next to each other in the draw order
@@ -285,6 +294,9 @@ def edit_rig(project_path: str, operations: list[dict], out_path: str | None = N
       out of it)
     - remove_slot: name
     - set_draw_order: order=[every slot, back to front] or slot + index
+    - set_event: name [, int, float, string, audio (path in the skeleton's
+      audio folder), volume, balance]: define an event or its defaults
+    - remove_event: name (only if no animation keys it)
     Draw order keys keep showing the same order when slots are added,
     removed, renamed or reordered. Renamed slots need renaming in game code
     that looks them up by name.
@@ -322,8 +334,8 @@ def add_constraint(
     allow_version_mismatch: bool = False,
     save_project_version: bool = False,
 ) -> dict:
-    """Add an IK, transform, physics or (4.3) slider constraint, written in
-    the skeleton's format version. Options one version names differently are
+    """Add an IK, transform, path, physics or (4.3) slider constraint, written
+    in the skeleton's format version. Options one version names differently are
     translated; an option only 4.3 has is refused on a 4.2 skeleton.
 
     - ik: bones (1 or 2, parent then child), target bone; params mix,
@@ -337,6 +349,11 @@ def add_constraint(
       (4.3 also: localSource, localTarget, additive, clamp, and properties
       mapping source properties to target properties, e.g. {"rotate": {"to":
       {"x": {"scale": 2}}}}; default: each property drives itself).
+    - path: bones that follow a path, target = the slot showing the path
+      (add_shape type=path adds one); params positionMode (percent, fixed),
+      spacingMode (length, fixed, percent, proportional), rotateMode
+      (tangent, chain, chainScale), position, spacing, rotation (offset),
+      mixRotate, mixX, mixY (follows mixX unless given).
     - physics: bone; preset hair, cloth, tail, antenna or jiggle, and/or params
       x, y, rotate, scaleX, shearX (0..1: what it moves), inertia, strength,
       damping, mass, wind, gravity, mix, limit, fps (4.3 also scaleY mode).
@@ -346,11 +363,12 @@ def add_constraint(
 
     Args:
         project_path: Absolute path to the skeleton .json.
-        type: ik, transform, physics or slider.
+        type: ik, transform, path, physics or slider.
         name: Constraint name.
-        bones: Constrained bones (ik, transform).
+        bones: Constrained bones (ik, transform, path).
         bone: Simulated bone (physics) or driving bone (slider).
-        target: Target bone (ik, transform). Created if missing and target_at is given.
+        target: Target bone (ik, transform; created if missing and target_at
+            is given), or the path's slot (path).
         target_at: Where to create a missing target: a bone name (its world
             position) or [x, y] world point.
         target_parent: Parent for a created target (default: the root bone).
@@ -401,7 +419,7 @@ def remove_constraint(project_path: str, name: str, out_path: str | None = None,
 def add_attachment(
     project_path: str,
     slot: str,
-    image_path: str,
+    image_path: str | None = None,
     name: str | None = None,
     skin: str = "default",
     x: float = 0.0,
@@ -411,17 +429,23 @@ def add_attachment(
     set_as_setup: bool = False,
     replace: bool = False,
     atlas_path: str | None = None,
+    frames: list[str] | None = None,
+    setup_frame: int = 0,
     allow_version_mismatch: bool = False,
     save_project_version: bool = False,
 ) -> dict:
     """Add a PNG as a region attachment on a slot (e.g. a mouth shape or an
     alternate hand to swap with an attachment timeline), copy it into the
-    skeleton's images folder and repack the atlas.
+    skeleton's images folder and repack the atlas. With `frames` it is an
+    image sequence (flames, blinking lights): the images are stored as
+    <name>_01, <name>_02, ... and animations pick the frame with sequence
+    keys (add_animation: "attachments": {skin: {slot: {name: {"sequence":
+    [{"time": 0, "mode": "loop", "delay": 0.1}]}}}}).
 
     Args:
         project_path: Absolute path to the skeleton .json (edited in place).
         slot: Slot to attach to (add one first with edit_rig add_slot if needed).
-        image_path: Absolute path to the PNG.
+        image_path: Absolute path to the PNG (or give frames).
         name: Attachment name; default the PNG's file name without extension.
         skin: Skin to add it to (created if missing).
         x, y, rotation: Image centre and angle relative to the slot's bone, or
@@ -429,26 +453,303 @@ def add_attachment(
         set_as_setup: Show it in the setup pose (sets the slot's attachment).
         replace: Overwrite an attachment of the same name.
         atlas_path: Atlas to rewrite; default <skeleton>.atlas next to the JSON.
+        frames: PNGs of an image sequence, in order (instead of image_path).
+        setup_frame: The frame (0-based) shown in the setup pose.
         allow_version_mismatch: Edit even though the file's format version
             differs from the game project's (only when the user said so).
         save_project_version: Save the file's version as the game project's
             .spine-version (when the project's version was unclear).
     """
-    size = att_ops.image_size(image_path)
-    name = name or Path(image_path).stem
-    # Everything that could stop the copy or the repack is checked before the JSON is written.
-    att_ops.check_new_image(d.load(project_path), project_path, image_path, name, replace)
-    result = edit_skeleton(
-        project_path,
-        lambda doc: att_ops.add_region(doc, slot, name, size, skin, x, y, rotation,
-                                       world=world, set_as_setup=set_as_setup, replace=replace),
-        allow_version_mismatch=allow_version_mismatch,
-        save_project_version=save_project_version,
-    )
-    doc = d.load(project_path)
-    result["image"] = str(att_ops.copy_image(image_path, att_ops.images_dir(project_path, doc), name))
-    result["atlas"] = att_ops.repack(project_path, atlas_path)
+    name = name or (Path(image_path).stem if image_path else None)
+    if not name:
+        raise EditError("give name (or image_path, whose file name it defaults to)")
+    images, size, path, sequence = _images(name, image_path, frames, setup_frame)
+    if size is None:
+        raise EditError("give image_path or frames")
+
+    def edit(doc):
+        return att_ops.add_region(doc, slot, name, size, skin, x, y, rotation, world=world,
+                                  set_as_setup=set_as_setup, replace=replace, sequence=sequence, path=path)
+
+    return _with_images(project_path, images, replace, atlas_path, edit, allow_version_mismatch,
+                        save_project_version)
+
+
+def _images(name: str, image_path: str | None, frames: list[str] | None, setup_frame: int = 0):
+    """Images to copy in (region name -> PNG), the attachment's size, its
+    region path when that differs from its name, and its sequence."""
+    if image_path and frames:
+        raise EditError("give image_path or frames, not both")
+    if frames:
+        sequence = att_ops.make_sequence(len(frames), setup=setup_frame)
+        path = f"{name}_"
+        return (dict(zip(att_ops.sequence_names(path, sequence), frames)), att_ops.image_size(frames[0]), path,
+                sequence)
+    if image_path:
+        return {name: image_path}, att_ops.image_size(image_path), None, None
+    return {}, None, None, None
+
+
+def _with_images(project_path: str, images: dict[str, str], replace: bool, atlas_path: str | None, edit,
+                 allow_version_mismatch: bool, save_project_version: bool) -> dict:
+    """Edit the skeleton, then copy the images in and repack the atlas;
+    everything that could stop the copy or the repack is checked first."""
+    if images:
+        att_ops.check_new_images(d.load(project_path), project_path, images, replace)
+    result = edit_skeleton(project_path, edit, allow_version_mismatch=allow_version_mismatch,
+                           save_project_version=save_project_version)
+    if images:
+        folder = att_ops.images_dir(project_path, d.load(project_path))
+        copied = [str(att_ops.copy_image(src, folder, region)) for region, src in images.items()]
+        result["images" if len(copied) > 1 else "image"] = copied if len(copied) > 1 else copied[0]
+        result["atlas"] = att_ops.repack(project_path, atlas_path)
     return result
+
+
+@mcp.tool()
+@_asks
+def add_mesh(
+    project_path: str,
+    slot: str,
+    name: str | None = None,
+    image_path: str | None = None,
+    frames: list[str] | None = None,
+    x: float = 0.0,
+    y: float = 0.0,
+    rotation: float = 0.0,
+    world: bool = False,
+    grid: list[int] | None = None,
+    bones: list[str] | None = None,
+    weights: list[dict] | None = None,
+    source: str | None = None,
+    source_skin: str | None = None,
+    source_slot: str | None = None,
+    timelines: bool = True,
+    skin: str = "default",
+    set_as_setup: bool = False,
+    replace: bool = False,
+    atlas_path: str | None = None,
+    allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
+) -> dict:
+    """Add a mesh attachment: an image on a grid of vertices that can bend
+    with bones (weights) or be reshaped with deform keys.
+
+    - In place of a region: give the region's name and no image; it becomes
+      a mesh with the same image and placement, and its keys keep working.
+    - From an image: image_path (or frames for an image sequence), placed
+      like a region (x, y, rotation relative to the slot's bone, or world).
+    - Linked mesh: source names a mesh whose vertices, triangles and weights
+      it reuses with another image (default the source's image), e.g. the
+      same arm in another skin. timelines=true plays the source's deform
+      keys too. (4.3) source_slot may be another slot.
+
+    bones binds the vertices to those bones with automatic weights (inverse
+    distance to each bone, at most 4 per vertex), so the image bends with
+    them, e.g. bones=["arm_upper", "arm_lower"] for an elbow; weights gives
+    [{bone: weight}, ...] per vertex instead. Without either, the mesh
+    follows the slot's bone. Deform keys go in add_animation:
+    "attachments": {skin: {slot: {name: {"deform": [{"time": 0,
+    "vertices": [dx, dy, ...]}]}}}} (one dx, dy per vertex, or per weight
+    for a weighted mesh).
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        slot: The mesh's slot.
+        name: Attachment name (default the image's file name).
+        image_path: PNG to show (copied into the images folder; atlas repacked).
+        frames: PNGs of an image sequence, instead of image_path.
+        x, y, rotation: Image centre and angle relative to the slot's bone
+            (world x, y with world=true).
+        grid: [columns, rows] of the vertex grid; default cells of about 48 px.
+        bones: Bind to these bones with automatic weights.
+        weights: Per-vertex {bone: weight} instead of bones.
+        source: Make a linked mesh of this mesh.
+        source_skin: Skin holding the source mesh (default "default").
+        source_slot: (4.3) Slot holding the source mesh (default this slot).
+        timelines: A linked mesh plays its source's deform keys.
+        skin: Skin to add it to (created if missing).
+        set_as_setup: Show it in the setup pose.
+        replace: Overwrite an attachment of the same name.
+        atlas_path: Atlas to rewrite; default <skeleton>.atlas next to the JSON.
+        allow_version_mismatch: Edit even though the file's format version
+            differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
+    """
+    name = name or (Path(image_path).stem if image_path else None)
+    if not name:
+        raise EditError("give name: the region to turn into a mesh, or the new mesh's name")
+    images, size, path, sequence = _images(name, image_path, frames)
+
+    def edit(doc):
+        if source is not None:
+            linked_path = path
+            if not images:  # the source's image
+                owner = d.find_skin(doc, source_skin or "default") or {}
+                src = ((owner.get("attachments") or {}).get(source_slot or slot) or {}).get(source) or {}
+                linked_path = src.get("path", source)
+            return mesh_ops.add_linked_mesh(doc, slot, name, source, size, skin, linked_path, source_skin,
+                                            source_slot, timelines, set_as_setup, replace, sequence)
+        return mesh_ops.add_mesh(doc, slot, name, size, skin, path, x, y, rotation, 1.0, 1.0, world,
+                                 tuple(grid) if grid else None, bones, weights, set_as_setup, replace, sequence)
+
+    return _with_images(project_path, images, replace, atlas_path, edit, allow_version_mismatch,
+                        save_project_version)
+
+
+@mcp.tool()
+@_asks
+def set_weights(
+    project_path: str,
+    slot: str,
+    attachment: str,
+    bones: list[str] | None = None,
+    weights: list[dict] | None = None,
+    skin: str = "default",
+    out_path: str | None = None,
+    allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
+) -> dict:
+    """Bind a mesh's vertices (or a bounding box's, clip's or path's) to
+    bones, keeping them where they are in the setup pose: automatic weights
+    from `bones`, or `weights` per vertex ([{bone: weight}, ...]). bones=[]
+    unbinds them, back to following the slot's bone. Refused while the
+    attachment has deform keys (their layout depends on the weights).
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        slot: The attachment's slot.
+        attachment: The attachment's name.
+        bones: Bones for automatic weights ([] to unbind).
+        weights: Per-vertex {bone: weight} instead.
+        skin: The attachment's skin.
+        out_path: Write to this path instead of editing in place.
+        allow_version_mismatch: Edit even though the file's format version
+            differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
+    """
+    return edit_skeleton(project_path, lambda doc: mesh_ops.set_weights(doc, slot, attachment, skin, bones, weights),
+                         out_path, allow_version_mismatch=allow_version_mismatch,
+                         save_project_version=save_project_version)
+
+
+@mcp.tool()
+@_asks
+def add_shape(
+    project_path: str,
+    slot: str,
+    type: str,
+    name: str | None = None,
+    vertices: list[list[float]] | None = None,
+    points: list | None = None,
+    x: float = 0.0,
+    y: float = 0.0,
+    rotation: float = 0.0,
+    closed: bool = False,
+    constant_speed: bool = True,
+    world: bool = False,
+    skin: str = "default",
+    set_as_setup: bool | None = None,
+    replace: bool = False,
+    color: str | None = None,
+    out_path: str | None = None,
+    allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
+) -> dict:
+    """Add a bounding box, point or path attachment (positions relative to
+    the slot's bone, y up, or world with world=true).
+
+    - boundingbox: vertices [[x, y], ...] (3 or more): a polygon for hit
+      tests (the runtime's SkeletonBounds uses the boxes slots show).
+    - point: x, y, rotation: a position and direction, e.g. a muzzle or
+      where a particle effect starts.
+    - path: points, each [x, y] (smooth handles are made) or {"x", "y",
+      "in": [x, y], "out": [x, y]}; closed, constant_speed. Bones follow it
+      with add_constraint type=path.
+
+    A bounding box or path is shown in the setup pose by default (the
+    runtime uses the one a slot shows), so give it its own slot (edit_rig
+    add_slot).
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        slot: The attachment's slot.
+        type: boundingbox, point or path.
+        name: Attachment name (default bounds, point or path).
+        vertices: The bounding box polygon.
+        points: The path's knots.
+        x, y, rotation: The point.
+        closed: The path loops back to its first point.
+        constant_speed: Bones move along the path at an even speed.
+        world: Positions are world-space.
+        skin: Skin to add it to (created if missing).
+        set_as_setup: Show it in the setup pose (default true for a bounding
+            box or path, false for a point).
+        replace: Overwrite an attachment of the same name.
+        color: RRGGBBAA, how the editor draws it.
+        out_path: Write to this path instead of editing in place.
+        allow_version_mismatch: Edit even though the file's format version
+            differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
+    """
+    if type == "boundingbox":
+        def edit(doc):
+            return shape_ops.add_bounding_box(doc, slot, vertices, name or "bounds", skin, world,
+                                              True if set_as_setup is None else set_as_setup, replace, color)
+    elif type == "point":
+        def edit(doc):
+            result = shape_ops.add_point(doc, slot, name or "point", x, y, rotation, skin, world, replace, color)
+            if set_as_setup:
+                d.slot_map(doc)[slot]["attachment"] = name or "point"
+            return result
+    elif type == "path":
+        def edit(doc):
+            return shape_ops.add_path(doc, slot, points, name or "path", skin, closed, constant_speed, world,
+                                      True if set_as_setup is None else set_as_setup, replace, color)
+    else:
+        raise EditError("type must be boundingbox, point or path")
+    return edit_skeleton(project_path, edit, out_path, allow_version_mismatch=allow_version_mismatch,
+                         save_project_version=save_project_version)
+
+
+@mcp.tool()
+@_asks
+def edit_skin(
+    project_path: str,
+    operations: list[dict],
+    out_path: str | None = None,
+    allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
+) -> dict:
+    """Add, copy, rename or remove skins, and make bones and constraints
+    active only with a skin (e.g. a cape's bones and physics only in the
+    "caped" skin). Attachments go into a skin with the attachment tools'
+    `skin` argument.
+
+    Operations ("op" plus its fields), applied in order:
+    - add_skin: name [, copy_from (a skin to copy), color]
+    - rename_skin: name, to
+    - remove_skin: name (with its deform and sequence keys)
+    - add_to_skin: skin, bones=[...], constraints=[...] (they become active
+      only while a skin listing them is the current skin)
+    - remove_from_skin: skin, bones, constraints (one no skin lists is
+      active for every skin again)
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        operations: e.g. [{"op": "add_skin", "name": "armor", "copy_from": "default"}].
+        out_path: Write to this path instead of editing in place.
+        allow_version_mismatch: Edit even though the file's format version
+            differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
+    """
+    return edit_skeleton(project_path, lambda doc: skin_ops.edit_skins(doc, operations), out_path,
+                         allow_version_mismatch=allow_version_mismatch,
+                         save_project_version=save_project_version)
 
 
 @mcp.tool()

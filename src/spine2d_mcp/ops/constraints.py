@@ -1,5 +1,5 @@
-"""Add and remove IK, transform, physics and (4.3) slider constraints, in the
-skeleton's own format version.
+"""Add and remove IK, transform, path, physics and (4.3) slider constraints,
+in the skeleton's own format version.
 
 4.2 keeps one top-level array per type, each entry with an `order`; 4.3 keeps
 one `constraints` array whose position is the apply order. The options are
@@ -40,6 +40,10 @@ _PHYSICS = {"x": 0, "y": 0, "rotate": 0, "scaleX": 0, "shearX": 0, "limit": 5000
 _PHYSICS_DEFAULTS = {"4.2": {"inertia": 1, "damping": 1}, "4.3": {"inertia": 0.5, "damping": 0.85}}
 _SLIDER = {"additive": False, "loop": False, "mix": 1, "time": 0, "property": None, "from": 0, "to": 0,
            "scale": 1, "max": 0, "local": False}
+_PATH = {"positionMode": "percent", "spacingMode": "length", "rotateMode": "tangent", "rotation": 0,
+         "position": 0, "spacing": 0, "mixRotate": 1, "mixX": 1, "mixY": None}
+PATH_MODES = {"positionMode": ("fixed", "percent"), "spacingMode": ("length", "fixed", "percent", "proportional"),
+              "rotateMode": ("tangent", "chain", "chainScale")}
 _MIX = {"rotate": "mixRotate", "x": "mixX", "y": "mixY", "scaleX": "mixScaleX", "scaleY": "mixScaleY",
         "shearY": "mixShearY"}
 
@@ -151,6 +155,30 @@ def _slider(doc: dict, entry: dict, bone: str | None, params: dict) -> None:
     _apply(entry, params, _SLIDER, "slider")
 
 
+def _path(doc: dict, version: str, entry: dict, bones: list[str] | None, slot: str | None, params: dict) -> None:
+    """Bones follow the path attachment the slot shows. mixY follows mixX
+    unless given (4.3 reads it so; 4.2 reads 1, so it is written out)."""
+    if not bones or any(b not in d.bone_map(doc) for b in bones):
+        raise EditError("path constraints need `bones` (this skeleton's) to move along the path")
+    if slot not in d.slot_map(doc):
+        raise EditError("path constraints need target: the slot showing the path (add_shape type=path adds one)")
+    paths = [n for s in d.skins(doc) for n, a in (((s.get("attachments") or {}).get(slot)) or {}).items()
+             if isinstance(a, dict) and a.get("type") == "path"]
+    if not paths:
+        raise EditError(f"slot {slot!r} has no path attachment (add_shape type=path adds one)")
+    for key, allowed in PATH_MODES.items():
+        if key in params and params[key] not in allowed:
+            raise EditError(f"{key} must be one of {', '.join(allowed)}")
+    entry["bones"] = list(bones)
+    entry[d.path_slot_key(doc)] = slot
+    params = dict(params)
+    mix_x = params.get("mixX", 1)
+    mix_y = params.pop("mixY", mix_x)
+    if mix_y != (mix_x if version == "4.3" else 1):
+        params["mixY"] = mix_y
+    _apply(entry, params, _PATH, "path")
+
+
 def add_constraint(
     doc: dict,
     type: str,
@@ -166,11 +194,11 @@ def add_constraint(
     **params,
 ) -> dict:
     version = versions.layout(doc)
-    allowed = ("ik", "transform", "physics", "slider") if version == "4.3" else ("ik", "transform", "physics")
+    allowed = ("ik", "transform", "path", "physics") + (("slider",) if version == "4.3" else ())
     if type == "slider":
         _only_43(version, "a slider")
     if type not in allowed:
-        raise EditError(f"type must be {', '.join(allowed)} (path constraints need path attachments)")
+        raise EditError(f"type must be {', '.join(allowed)}")
     existing = {c.get("name"): (k, c) for k, c in d.all_constraints(doc)}
     before = d.never_applied(doc)
     in_skins: list[dict] = []
@@ -208,6 +236,8 @@ def add_constraint(
             raise EditError("physics moves nothing: set at least one of x, y, rotate, scaleX, shearX (0..1), or a preset")
     elif type == "slider":
         _slider(doc, entry, bone, params)
+    elif type == "path":
+        _path(doc, version, entry, bones, target, params)
     else:
         if not bones:
             raise EditError(f"{type} constraints need `bones`")
