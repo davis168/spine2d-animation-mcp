@@ -425,6 +425,16 @@ class _Checker:
                         self.error(apath, "not an attachment object")
                         continue
                     self.attachment(apath, skin, slot, att)
+        for c, used in d.tipless_physics(self.doc):
+            self.warn(f"physics[{c.get('name')}]",
+                      f"{', '.join(used)} on bone {c.get('bone')!r}, which has no length: they swing the bone's tip, "
+                      "so the Spine editor drops them on import; give the bone a length (edit_rig set_bone length)")
+        for skin, slot, name in d.default_skin_clashes(self.doc):
+            self.error(f"skins[{skin}].attachments.{slot}.{name}",
+                       f"{name!r} is also in the default skin's {slot!r} slot: runtimes show this skin's, but the "
+                       "Spine editor refuses to import it (\"Multiple attachments have the same name\"), since a "
+                       "name a skin uses is a skin placeholder, which the default skin cannot also hold; move it "
+                       "out of the default skin into skins (edit_skin move_to_skins) or use another name here")
         if skins and "default" not in self.skin_names:
             self.warn("skins", "no 'default' skin: slots show nothing until a skin is set at runtime")
         listed = {n for skin in skins if isinstance(skin, dict) for key in ("bones", *d.CONSTRAINT_KINDS)

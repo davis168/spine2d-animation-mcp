@@ -142,6 +142,7 @@ def test_43_constraints_use_one_array_and_translate_options(doc43):
     con.add_constraint(doc43, "ik", "reach", bones=["arm_left"], target="hand_left", uniform=True, stretch=True)
     con.add_constraint(doc43, "transform", "follow", bones=["hand_right"], target="hand_left", local=True,
                        relative=True, mixRotate=0.5)
+    rig.set_bone(doc43, "head", length=60)
     con.add_constraint(doc43, "physics", "hair", bone="head", preset="hair")
     con.add_constraint(doc43, "transform", "first", bones=["foot_left"], target="foot_right", order=0,
                        properties={"x": {"to": {"y": {"scale": -1}}}})
@@ -246,20 +247,20 @@ def test_tools_keep_their_signatures():
 
 def test_42_orders_stay_0_to_n_minus_1(doc):
     for name, bone in (("a", "head"), ("b", "torso"), ("c", "chest")):
-        con.add_constraint(doc, "physics", name, bone=bone, rotate=1)
+        con.add_constraint(doc, "physics", name, bone=bone, x=1)
     con.remove_constraint(doc, "b")
-    con.add_constraint(doc, "physics", "d", bone="neck", rotate=1)
-    con.add_constraint(doc, "physics", "first", bone="hip", rotate=1, order=0)
+    con.add_constraint(doc, "physics", "d", bone="neck", x=1)
+    con.add_constraint(doc, "physics", "first", bone="hip", x=1, order=0)
     orders = {c["name"]: c["order"] for _, c in d.all_constraints(doc)}
     assert orders == {"first": 0, "a": 1, "c": 2, "d": 3}
-    con.add_constraint(doc, "physics", "c", bone="chest", rotate=0.5, replace=True)
+    con.add_constraint(doc, "physics", "c", bone="chest", x=0.5, replace=True)
     assert {c["name"]: c["order"] for _, c in d.all_constraints(doc)}["c"] == 2
     assert d.never_applied(doc) == [] and check(doc) == []
 
 
 def test_editing_renumbers_broken_42_orders_and_says_so(doc):
-    doc["physics"] = [{"name": "lost", "order": 7, "bone": "head", "rotate": 1}]
-    detail = con.add_constraint(doc, "physics", "new", bone="torso", rotate=1)
+    doc["physics"] = [{"name": "lost", "order": 7, "bone": "head", "x": 1}]
+    detail = con.add_constraint(doc, "physics", "new", bone="torso", x=1)
     assert "lost never ran before" in detail["note"] and d.never_applied(doc) == []
 
 
@@ -345,6 +346,7 @@ def test_editor_round_trip(make, imported43, game, tmp_path, request):
     if make == "imported43":
         path = imported43.project_path
         server.add_animation(str(path), "idle", preset="idle")
+        server.edit_rig(str(path), [{"op": "set_bone", "name": "head", "length": 60}])
         server.add_constraint(str(path), "physics", "hair", bone="head", preset="hair")
     else:
         source = _copy_rig(game(declared="4.3") / "spine")

@@ -2,6 +2,7 @@
 attachments with path constraints, image sequences, skins with skin bones
 and constraints, bone display fields, and runtime releases across 4.3.x."""
 
+import copy
 import json
 import math
 import shutil
@@ -139,9 +140,9 @@ def test_linked_meshes(doc, doc43):
     for version_doc in (doc, doc43):
         meshes.add_mesh(version_doc, "arm_left", "arm_left")
         skins.add_skin(version_doc, "armor")
-        meshes.add_linked_mesh(version_doc, "arm_left", "arm_left", "arm_left", skin="armor", path="armor_arm",
+        meshes.add_linked_mesh(version_doc, "arm_left", "armored", "arm_left", skin="armor", path="armor_arm",
                                timelines=False)
-        linked = _att(version_doc, "arm_left", "arm_left", "armor")
+        linked = _att(version_doc, "arm_left", "armored", "armor")
         assert linked[d.linked_mesh_key(version_doc)] == "arm_left" and linked["timelines"] is False
         assert "skin" not in linked and check(version_doc) == []
     with pytest.raises(EditError, match="needs format version 4.3"):
@@ -226,8 +227,9 @@ def test_skins(doc43):
     rig.add_bone(doc43, "cape", "torso", y=20, length=40)
     rig.add_bone(doc43, "cape_tip", "cape", x=40)
     con.add_constraint(doc43, "physics", "cape_sway", bone="cape", preset="cloth")
-    skins.add_skin(doc43, "hero", copy_from="default")
-    assert _att(doc43, "head", "head", "hero") == _att(doc43, "head", "head")
+    with pytest.raises(EditError, match="show with every skin already"):
+        skins.add_skin(doc43, "hero", copy_from="default")
+    skins.add_skin(doc43, "hero")
     done = skins.add_to_skin(doc43, "hero", bones=["cape"], constraints=["cape_sway"])
     hero = d.find_skin(doc43, "hero")
     assert hero["bones"] == ["cape"] and hero["physics"] == ["cape_sway"] and "cape_tip" in done["note"]
@@ -240,8 +242,8 @@ def test_skins(doc43):
     assert any("a skin bone no skin lists" in w for w in _warnings(doc43))
     del d.bone_map(doc43)["cape"]["skin"]
     meshes.add_mesh(doc43, "arm_left", "arm_left")
-    meshes.add_mesh(doc43, "arm_left", "arm_left", skin="caped")  # its copy of the region too
-    meshes.add_linked_mesh(doc43, "arm_left", "alt", "arm_left", skin="caped")
+    skins.move_to_skins(doc43, "arm_left", "arm_left", ["caped"])
+    meshes.add_linked_mesh(doc43, "arm_left", "alt", "arm_left", skin="caped", source_skin="caped")
     with pytest.raises(EditError, match="the default skin is what slots show"):
         skins.rename_skin(doc43, "default", "base")
     skins.add_skin(doc43, "spare")
@@ -274,15 +276,16 @@ def test_skin_art_keeps_its_own_image(imported43, art):
     images = imported43.project_path.parent / "images"
     original = (images / "arm_left.png").read_bytes()
     server.add_mesh(path, "arm_left", "arm_left")
-    server.edit_skin(path, [{"op": "add_skin", "name": "armor"}])
-    result = server.add_mesh(path, "arm_left", "arm_left", source="arm_left", skin="armor",
+    server.edit_skin(path, [{"op": "move_to_skins", "slot": "arm_left", "attachment": "arm_left", "skins": ["base"]},
+                            {"op": "add_skin", "name": "armor"}])
+    result = server.add_mesh(path, "arm_left", "arm_left", source="arm_left", source_skin="base", skin="armor",
                              image_path=str(art / "armor_arm.png"))
     assert result["image"].endswith("images/armor/arm_left.png")
     assert (images / "arm_left.png").read_bytes() == original  # the default art is untouched
     doc = d.load(path)
     assert _att(doc, "arm_left", "arm_left", "armor")["path"] == "armor/arm_left"
     assert "armor/arm_left" in imported43.atlas_path.read_text() and check(doc) == []
-    with pytest.raises(EditError, match="is the image of default/arm_left/arm_left"):
+    with pytest.raises(EditError, match="is the image of base/arm_left/arm_left"):
         server.add_attachment(path, "arm_right", str(art / "armor_arm.png"), name="arm_left", replace=True)
     assert (images / "arm_left.png").read_bytes() == original
 
@@ -330,9 +333,53 @@ def test_event_definitions(doc43):
 def test_copying_a_skin_keeps_what_linked_meshes_link_to(doc43):
     meshes.add_mesh(doc43, "arm_left", "arm_left")
     skins.add_skin(doc43, "red")
-    meshes.add_linked_mesh(doc43, "arm_left", "arm_left", "arm_left", skin="red")  # links to the default mesh
+    meshes.add_linked_mesh(doc43, "arm_left", "red_arm", "arm_left", skin="red")  # links to the default mesh
     skins.add_skin(doc43, "blue", copy_from="red")
-    assert "skin" not in _att(doc43, "arm_left", "arm_left", "blue") and check(doc43) == []
+    assert "skin" not in _att(doc43, "arm_left", "red_arm", "blue") and check(doc43) == []
+
+
+def test_art_that_differs_per_skin_lives_only_in_skins(doc, doc43):
+    for version_doc in (doc, doc43):  # the 4.2.43 and 4.3.26 editors both refuse a name in both
+        clash = copy.deepcopy(version_doc)
+        skins.add_skin(clash, "armor")
+        clash["skins"][-1]["attachments"] = {"head": {"head": dict(_att(clash, "head", "head"))}}
+        errors = [str(f) for f in check(clash) if f.level == "error"]
+        assert len(errors) == 1 and "Spine editor refuses to import it" in errors[0] and "move_to_skins" in errors[0]
+    meshes.add_mesh(doc43, "arm_left", "arm_left")
+    add_animation(doc43, "flex", timelines={"attachments": {"default": {"arm_left": {"arm_left": {
+        "deform": [{"vertices": [1, 1]}]}}}}})
+    skins.add_skin(doc43, "red")
+    meshes.add_linked_mesh(doc43, "arm_left", "red_arm", "arm_left", skin="red")  # links to the default mesh
+    done = skins.move_to_skins(doc43, "arm_left", "arm_left", ["base", "armor"])
+    assert done["made"] == ["base", "armor"] and done["relinked"] == ["red/arm_left/red_arm"]
+    assert done["moved_keys_in"] == ["flex"] and "setSkinByName" in done["note"]
+    assert "arm_left" not in d.find_skin(doc43, "default")["attachments"]
+    assert _att(doc43, "arm_left", "arm_left", "base") == _att(doc43, "arm_left", "arm_left", "armor")
+    assert _att(doc43, "arm_left", "red_arm", "red")["skin"] == "base"
+    assert set(doc43["animations"]["flex"]["attachments"]) == {"base", "armor"} and check(doc43) == []
+    assert d.starting_skin(doc43) == "base" and d.starting_skin(doc) is None
+    with pytest.raises(EditError, match="the default skin has no 'arm_left' in slot 'arm_left'"):
+        skins.move_to_skins(doc43, "arm_left", "arm_left", ["other"])
+    d.find_skin(doc43, "default")["attachments"]["arm_left"] = {"red_arm": {"path": "arm_left", "width": 9, "height": 9}}
+    with pytest.raises(EditError, match="skin 'red' already has its own 'red_arm'"):
+        skins.move_to_skins(doc43, "arm_left", "red_arm", ["red"])
+
+
+def test_spine_import_explains_the_editors_skin_rule(imported43):
+    path = str(imported43.project_path)
+    doc = d.load(path)
+    doc["skins"].append({"name": "armor", "attachments": {"head": {"head": dict(_att(doc, "head", "head"))}}})
+    d.save(doc, path)
+    with pytest.raises(spine_cli.SpineCliError, match="armor/head/head.*move_to_skins"):
+        server.spine_import(path)  # before any editor runs
+
+
+def test_previews_start_in_the_skin_that_holds_the_art(imported43):
+    path = str(imported43.project_path)
+    server.edit_skin(path, [{"op": "move_to_skins", "slot": "head", "attachment": "head", "skins": ["base"]}])
+    player = Path(server.preview_html(path)["preview_path"]).read_text()
+    phaser = Path(server.preview_html(path, runtime="phaser")["preview_path"]).read_text()
+    assert '"skin": "base"' in player and '"skin": "base"' in phaser
 
 
 @pytest.mark.parametrize("fields", [{"scaleX": 2}, {"scaleY": -1}, {"rotation": 30, "scaleX": 0.5}])
@@ -374,6 +421,7 @@ def test_weights_need_normal_inherit(doc43):
 
 def test_replacing_a_skin_constraint_keeps_it_skin_only(doc, doc43):
     for version_doc in (doc, doc43):
+        rig.set_bone(version_doc, "head", length=60)
         con.add_constraint(version_doc, "physics", "sway", bone="head", preset="hair")
         skins.add_skin(version_doc, "hero")
         skins.add_to_skin(version_doc, "hero", constraints=["sway"])
@@ -451,6 +499,52 @@ def test_import_matches_the_header_to_the_editor(imported43):
     assert made["ok"] and not any("version" in w.lower() for w in made.get("warnings", [])), made
     assert d.load(path)["skeleton"]["spine"] == "4.3.20"  # the file itself is untouched
     assert not list(path.parent.glob(".*.import-*.json"))  # the copy is gone
+
+
+def test_physics_on_a_bone_without_length_is_flagged(doc, doc43):
+    doc43["constraints"] = [{"type": "physics", "name": "hair", "bone": "head", "rotate": 1, "x": 0.5}]
+    doc["physics"] = [{"name": "hair", "order": 0, "bone": "head", "shearX": 1}]
+    for version_doc, used in ((doc43, "rotate"), (doc, "shearX")):  # both editors drop them
+        assert any(f"{used} on bone 'head', which has no length" in w for w in _warnings(version_doc))
+        assert spine_cli.import_changes(version_doc)[0] == f"physics 'hair': {used} dropped (bone 'head' has no length)"
+
+
+@needs_spine
+def test_sliders_keep_their_animations_through_the_editor(imported43, tmp_path):
+    path = str(imported43.project_path)
+    for name in ("wave", "idle"):
+        server.add_animation(path, name, preset=name)
+    server.add_animation(path, "bend", timelines={"bones": {"hand_left": {"rotate": [{"value": 0}, {"time": 1, "value": 60}]}}})
+    server.add_constraint(path, "slider", "breath", params={"animation": "idle", "time": 0.5})
+    server.add_constraint(path, "slider", "nod", bone="torso",
+                          params={"animation": "bend", "property": "rotate", "to": 1, "scale": 0.05})
+    editor = spine_cli.editor_for("4.3")
+    assert spine_cli.editor_animation_order(["wave", "idle", "bend", "b10", "b2"], editor) == \
+        ["b2", "b10", "bend", "idle", "wave"]
+    made = server.spine_import(path)
+    out = server.spine_export(made["spine_project"], str(tmp_path / "back"), "json", format_version="4.3")
+    back = json.loads(Path(next(f for f in out["files"] if f.endswith(".json"))).read_text())
+    assert {c["name"]: c["animation"] for c in back["constraints"] if c["type"] == "slider"} == \
+        {"breath": "idle", "nod": "bend"}  # by index into its sorted list, nod would play "wave"
+
+
+@needs_spine
+def test_skin_placeholders_go_through_the_editor(imported43, art, tmp_path):
+    path = str(imported43.project_path)
+    server.add_mesh(path, "arm_left", "arm_left", bones=["arm_left", "hand_left"], grid=[1, 4])
+    server.edit_skin(path, [{"op": "move_to_skins", "slot": "arm_left", "attachment": "arm_left", "skins": ["base"]},
+                            {"op": "add_skin", "name": "armor"}])
+    server.add_mesh(path, "arm_left", "arm_left", source="arm_left", source_skin="base", skin="armor",
+                    image_path=str(art / "armor_arm.png"))
+    made = server.spine_import(path)
+    assert made["ok"], made
+    out = server.spine_export(made["spine_project"], str(tmp_path / "back"), "json", format_version="4.3")
+    back = json.loads(Path(next(f for f in out["files"] if f.endswith(".json"))).read_text())
+    held = {s["name"]: s.get("attachments", {}) for s in back["skins"]}
+    assert "arm_left" not in held.get("default", {}) and held["base"]["arm_left"]["arm_left"]["type"] == "mesh"
+    armor = held["armor"]["arm_left"]["arm_left"]
+    assert (armor["type"], armor["skin"], armor["source"]) == ("linkedmesh", "base", "arm_left")
+    assert _errors(back) == []
 
 
 # ── runtimes, conversion and the editor ─────────────────────────────────────

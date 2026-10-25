@@ -119,6 +119,7 @@ def test_reparent_keeps_world_transform_and_remaps_weights():
 
 def test_rename_bone_updates_every_reference(doc):
     add_animation(doc, "idle", preset="idle")
+    rig.set_bone(doc, "head", length=60)
     con.add_constraint(doc, "physics", "sway", bone="head", preset="hair")
     rig.rename_bone(doc, "head", "Head")
     assert d.slot_map(doc)["head"]["bone"] == "Head"
@@ -176,6 +177,11 @@ def test_ik_on_bones_along_their_limbs_does_not_warn():
 
 
 def test_physics_transform_and_remove(doc):
+    with pytest.raises(EditError, match="bone 'head' has no length, which physics rotate need"):
+        con.add_constraint(doc, "physics", "hair", bone="head", preset="hair")
+    con.add_constraint(doc, "physics", "drift", bone="head", x=0.5)  # moving the bone itself needs no length
+    con.remove_constraint(doc, "drift")
+    rig.set_bone(doc, "head", length=60)
     con.add_constraint(doc, "physics", "hair", bone="head", preset="hair", damping=0.9)
     assert doc["physics"][0]["rotate"] == 1 and doc["physics"][0]["damping"] == 0.9
     with pytest.raises(EditError, match="moves nothing"):

@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 from .atlas import default_atlas
+from .spine import document as d
 from .spine import versions
 
 
@@ -84,6 +85,9 @@ def preview_html(
         config["premultipliedAlpha"] = False
     if animation or animations:
         config["animation"] = animation or animations[0]
+    skin = d.starting_skin(skeleton_doc)
+    if skin:
+        config["skin"] = skin
     name = html.escape(title or project_path.stem)
     page = f"""<!doctype html>
 <html lang="en">
@@ -143,7 +147,8 @@ def phaser_html(
         raise ValueError(f"no animation {animation!r} (have {', '.join(animations) or 'none'})")
     rel = lambda p: Path(os.path.relpath(p, out_path.parent)).as_posix()  # noqa: E731
     settings = {"skeleton": rel(project_path), "atlas": rel(atlas_path), "animation": animation or
-                (animations[0] if animations else None), "background": background}
+                (animations[0] if animations else None), "skin": d.starting_skin(skeleton_doc),
+                "background": background}
     page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -184,6 +189,7 @@ def phaser_html(
       try {{
         const obj = this.add.spine(0, 0, "data", "atlas");
         const data = obj.skeleton.data;
+        if (settings.skin) obj.skeleton.setSkinByName(settings.skin);  // slots whose art is only in skins
         obj.skeleton.updateWorldTransform(spine.Physics.update);  // bounds need world positions
         const bounds = obj.skeleton.getBoundsRect();  // y down: spine-phaser flips the skeleton
         const scale = Math.min(1, 600 / Math.max(bounds.width, 1), 560 / Math.max(bounds.height, 1));
@@ -197,6 +203,7 @@ def phaser_html(
         skinPick.onchange = () => {{ obj.skeleton.setSkinByName(skinPick.value); obj.skeleton.setupPoseSlots ?
           obj.skeleton.setupPoseSlots() : obj.skeleton.setSlotsToSetupPose(); }};
         if (settings.animation) animationPick.value = settings.animation;
+        if (settings.skin) skinPick.value = settings.skin;
         play();
         Object.assign(window.results, {{ loaded: true, version: data.version, animations: data.animations.map((a) => a.name),
           skins: data.skins.map((s) => s.name) }});
