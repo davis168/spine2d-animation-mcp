@@ -203,6 +203,7 @@ def test_add_attachment_will_not_overwrite_a_different_image(imported, tmp_path)
 
 def test_replacing_a_constraint_keeps_its_skins(imported):
     doc = d.load(imported.project_path)
+    rig.set_bone(doc, "head", length=60)
     con.add_constraint(doc, "physics", "sway", bone="head", preset="hair")
     doc["skins"][0]["physics"] = ["sway"]
     con.add_constraint(doc, "physics", "sway", bone="head", preset="tail", replace=True)

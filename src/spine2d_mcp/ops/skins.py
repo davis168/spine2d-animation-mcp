@@ -36,6 +36,9 @@ def add_skin(doc: dict, name: str, copy_from: str | None = None, color: str | No
         raise EditError("a skin needs a name")
     if d.find_skin(doc, name) is not None:
         raise EditError(f"skin {name!r} already exists")
+    if copy_from == "default":
+        raise EditError("the default skin's attachments show with every skin already; to give a slot other art "
+                        "in a skin, move its attachment out of the default skin first (move_to_skins)")
     skin: dict = copy.deepcopy(_skin(doc, copy_from)) if copy_from else {"attachments": {}}
     skin["name"] = name
     if color:
@@ -49,8 +52,8 @@ def rename_skin(doc: dict, name: str, to: str) -> dict:
     if d.find_skin(doc, to) is not None:
         raise EditError(f"skin {to!r} already exists")
     if name == "default":
-        raise EditError("the default skin is what slots show without a skin set; add a new skin instead "
-                        "(add_skin copy_from='default')")
+        raise EditError("the default skin is what slots show with any skin set; to make an attachment differ "
+                        "per skin, move it into skins (move_to_skins)")
     skin["name"] = to
     for s in d.skins(doc):
         for atts in (s.get("attachments") or {}).values():
@@ -80,6 +83,60 @@ def remove_skin(doc: dict, name: str) -> dict:
     freed = _unflag(doc)
     return {"op": "remove_skin", "skin": name, **({"removed_keys_in": keyed} if keyed else {}),
             **({"active_for_every_skin": freed} if freed else {})}
+
+
+def move_to_skins(doc: dict, slot: str, attachment: str, skins: list[str]) -> dict:
+    """Make a slot's attachment a skin placeholder: move it out of the default
+    skin into each of `skins` (made when missing), with its deform and
+    sequence keys, so another skin can show other art under the same name.
+    The slot then shows it only while one of those skins is set."""
+    if not isinstance(skins, list) or not skins or not all(isinstance(s, str) and s for s in skins):
+        raise EditError("give the skins to move it into, e.g. ['base']")
+    if "default" in skins:
+        raise EditError("it is in the default skin now; name the skins to move it into")
+    default = d.find_skin(doc, "default")
+    held = ((default or {}).get("attachments") or {}).get(slot) or {}
+    if attachment not in held:
+        raise EditError(f"the default skin has no {attachment!r} in slot {slot!r}")
+    for name in skins:
+        if attachment in (((d.find_skin(doc, name) or {}).get("attachments") or {}).get(slot) or {}):
+            raise EditError(f"skin {name!r} already has its own {attachment!r} in slot {slot!r}")
+    made = [name for name in skins if d.find_skin(doc, name) is None]
+    for name in made:
+        add_skin(doc, name)
+    moved = held.pop(attachment)
+    if not held:
+        del default["attachments"][slot]
+    for name in skins:
+        _skin(doc, name).setdefault("attachments", {}).setdefault(slot, {})[attachment] = copy.deepcopy(moved)
+    key = d.linked_mesh_key(doc)
+    relinked = []
+    for s in d.skins(doc):
+        for own_slot, atts in (s.get("attachments") or {}).items():
+            for name, att in (atts or {}).items():
+                if (isinstance(att, dict) and att.get("type") == "linkedmesh" and att.get(key) == attachment
+                        and att.get("skin", "default") == "default" and att.get("slot", own_slot) == slot):
+                    att["skin"] = skins[0]
+                    relinked.append(f"{s.get('name')}/{own_slot}/{name}")
+    keyed = []
+    for anim_name, anim in (doc.get("animations") or {}).items():
+        timelines = (anim or {}).get("attachments") or {}
+        slot_keys = (timelines.get("default") or {}).get(slot) or {}
+        if attachment not in slot_keys:
+            continue
+        entry = slot_keys.pop(attachment)
+        if not slot_keys:
+            del timelines["default"][slot]
+        if not timelines["default"]:
+            del timelines["default"]
+        for name in skins:
+            timelines.setdefault(name, {}).setdefault(slot, {})[attachment] = copy.deepcopy(entry)
+        keyed.append(anim_name)
+    return {"op": "move_to_skins", "slot": slot, "attachment": attachment, "skins": skins,
+            **({"made": made} if made else {}), **({"relinked": relinked} if relinked else {}),
+            **({"moved_keys_in": keyed} if keyed else {}),
+            "note": f"slot {slot!r} shows {attachment!r} only while one of {', '.join(skins)} is set: the game sets "
+                    "a skin (e.g. skeleton.setSkinByName)"}
 
 
 def _constraint_kind(doc: dict, name: str) -> tuple[str, dict]:
@@ -152,7 +209,7 @@ def _unflag(doc: dict) -> list[str]:
 
 
 _OPS = {"add_skin": add_skin, "rename_skin": rename_skin, "remove_skin": remove_skin,
-        "add_to_skin": add_to_skin, "remove_from_skin": remove_from_skin}
+        "move_to_skins": move_to_skins, "add_to_skin": add_to_skin, "remove_from_skin": remove_from_skin}
 OP_NAMES = tuple(_OPS)
 
 

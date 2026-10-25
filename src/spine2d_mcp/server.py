@@ -739,16 +739,24 @@ def edit_skin(
     "caped" skin). Attachments go into a skin with the attachment tools'
     `skin` argument.
 
-    A skin needs only the attachments that differ: a slot whose attachment
-    the current skin lacks shows the default skin's. So to swap art, start
-    an empty skin and add the new art under the default attachment's name,
-    e.g. add_mesh(skin="armor", name="arm_left", source="arm_left",
-    image_path=...) for armor on the same mesh; a skin's images are kept in
+    The default skin holds what every skin shows. An attachment that differs
+    per skin is a skin placeholder: it lives in skins, never also in the
+    default skin (the Spine editor refuses that). So to swap art, move the
+    attachment into a base skin, then give the other skin its own under the
+    same name:
+      edit_skin([{"op": "move_to_skins", "slot": "arm_left",
+                  "attachment": "arm_left", "skins": ["base"]},
+                 {"op": "add_skin", "name": "armor"}])
+      add_mesh(slot="arm_left", name="arm_left", skin="armor",
+               source="arm_left", source_skin="base", image_path=...)
+    The game then sets "base" or "armor". A skin's images are kept in
     images/<skin>/. copy_from copies a whole skin, for variants that change
     most of it (keys of copied attachments must then be added per skin).
 
     Operations ("op" plus its fields), applied in order:
-    - add_skin: name [, copy_from (a skin to copy), color]
+    - add_skin: name [, copy_from (another skin to copy), color]
+    - move_to_skins: slot, attachment, skins=[...] (out of the default skin
+      into those skins, made when missing, with its deform and sequence keys)
     - rename_skin: name, to
     - remove_skin: name (with its deform and sequence keys)
     - add_to_skin: skin, bones=[...], constraints=[...] (they become active
@@ -758,7 +766,7 @@ def edit_skin(
 
     Args:
         project_path: Absolute path to the skeleton .json.
-        operations: e.g. [{"op": "add_skin", "name": "armor", "copy_from": "default"}].
+        operations: e.g. [{"op": "add_skin", "name": "armor"}].
         out_path: Write to this path instead of editing in place.
         allow_version_mismatch: Edit even though the file's format version
             differs from the game project's (only when the user said so).
@@ -944,9 +952,13 @@ def spine_import(
     standard place). The editor imports only JSON of its own format version,
     so the editor is picked for the file's version (newest installed stable
     release, or $SPINE_EDITOR_VERSION); its reader reports anything it cannot
-    load. changed_on_import lists what the 4.3 editor's import changes
-    (clipping convex/inverse, nested folders' draw order keys); it is
-    recorded beside the project, and spine_export's JSON exports put it back.
+    load. changed_on_import lists what the editor's import changes: 4.3
+    clipping convex/inverse and nested folders' draw order keys, which are
+    recorded beside the project and put back by spine_export's JSON and
+    binary exports, and physics rotate/scaleX/shearX on a bone without length
+    (give the bone a length). A skin attachment under a name the default skin
+    also has in that slot is refused before the editor runs (it would not
+    import); edit_skin move_to_skins fixes it.
 
     Args:
         project_path: Absolute path to the skeleton .json.

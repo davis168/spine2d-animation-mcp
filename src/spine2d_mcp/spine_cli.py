@@ -184,15 +184,31 @@ def spine_import(
     project_path = Path(project_path)
     version = json_version(project_path)
     target = Path(spine_project) if spine_project else project_path.with_suffix(".spine")
-    editor = editor_for(version, editor_version)
     doc = json.loads(project_path.read_text(encoding="utf-8"))
-    source, header = project_path, (doc.get("skeleton") or {}).get("spine")
+    clashes = d.default_skin_clashes(doc)
+    if clashes:
+        raise SpineCliError(
+            "the Spine editor refuses a skin attachment under a name the default skin also has in that slot ("
+            + ", ".join("/".join(c) for c in clashes) + "): move it out of the default skin with edit_skin "
+            "move_to_skins, or use another name in the skin")
+    editor = editor_for(version, editor_version)
+    given, header = dict(doc), (doc.get("skeleton") or {}).get("spine")
     if editor and header != editor and versions.major_minor(header) == versions.major_minor(editor):
         # An editor warns unless the header names its own release; the data
-        # is the same across a format version's releases, so import a copy
-        # (beside the original, so its images path still resolves).
+        # is the same across a format version's releases.
+        given["skeleton"] = {**doc["skeleton"], "spine": editor}
+    animations = doc.get("animations") or {}
+    if len(animations) > 1 and d.constraints(doc, "slider"):
+        # The 4.3 editor keeps a slider's animation as an index, then sorts
+        # the animations by name, so give it them in its own order.
+        order = editor_animation_order(list(animations), editor)
+        if order != list(animations):
+            given["animations"] = {name: animations[name] for name in order}
+    source = project_path
+    if given["skeleton"] is not doc.get("skeleton") or given.get("animations") is not doc.get("animations"):
+        # import a copy beside the original, so its images path still resolves
         source = project_path.with_name(f".{project_path.stem}.import-{editor}.json")
-        source.write_text(json.dumps({**doc, "skeleton": {**doc["skeleton"], "spine": editor}}), encoding="utf-8")
+        source.write_text(json.dumps(given), encoding="utf-8")
     try:
         run = run_spine(["-i", str(source), "-o", str(target), "-r", skeleton_name or project_path.stem], editor)
     finally:
@@ -211,13 +227,34 @@ def spine_import(
     return result
 
 
+def editor_animation_order(names: list[str], editor: str | None) -> list[str]:
+    """The order an editor keeps these animations in (its own sort by name),
+    read from a skeleton holding only those names, imported and exported
+    back; `names` unchanged when that fails."""
+    with tempfile.TemporaryDirectory(prefix="spine-order-") as tmp:
+        folder = Path(tmp)
+        probe = {"skeleton": {"spine": editor}, "bones": [{"name": "root"}],
+                 "animations": {n: {"bones": {"root": {"rotate": [{"value": 0}]}}} for n in names}}
+        (folder / "order.json").write_text(json.dumps(probe), encoding="utf-8")
+        run = run_spine(["-i", str(folder / "order.json"), "-o", str(folder / "order.spine"), "-r", "order"], editor)
+        if run.ok:
+            run = run_spine(["-i", str(folder / "order.spine"), "-o", str(folder / "out"), "-e", "json"], editor)
+        exported = folder / "out" / "order.json"
+        if not run.ok or not exported.is_file():
+            return names
+        order = list(json.loads(exported.read_text(encoding="utf-8")).get("animations") or {})
+    return order if sorted(order) == sorted(names) else names
+
+
 def import_changes(doc: dict) -> list[str]:
-    """What the Spine 4.3 editor's JSON import (seen with 4.3.26) changes or
-    drops in a 4.3 skeleton: clipping flags, which it does not read, and draw
-    order folder keys that do not key one top-level draw order folder."""
+    """What the Spine editor's JSON import changes or drops: physics rotate,
+    scaleX and shearX on a bone without length (4.2 and 4.3), and in 4.3
+    (seen with 4.3.26) clipping flags, which it does not read, and draw order
+    folder keys that do not key one top-level draw order folder."""
+    out = [f"physics {c.get('name')!r}: {', '.join(used)} dropped (bone {c.get('bone')!r} has no length)"
+           for c, used in d.tipless_physics(doc)]
     if versions.layout(doc) == "4.2":
-        return []
-    out = []
+        return out
     for skin in d.skins(doc):
         for slot, atts in (skin.get("attachments") or {}).items():
             for name, att in (atts or {}).items():

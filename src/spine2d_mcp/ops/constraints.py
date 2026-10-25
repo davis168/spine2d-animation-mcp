@@ -236,6 +236,11 @@ def add_constraint(
         _apply(entry, params, fields, type)
         if not any(entry.get(k) for k in ("x", "y", "rotate", "scaleX", "shearX")):
             raise EditError("physics moves nothing: set at least one of x, y, rotate, scaleX, shearX (0..1), or a preset")
+        tip = [k for k in d.PHYSICS_TIP if entry.get(k)]
+        if tip and not d.bone_map(doc)[bone].get("length"):
+            raise EditError(f"bone {bone!r} has no length, which physics {', '.join(tip)} need (they swing the bone's "
+                            "tip): give it a length first (edit_rig set_bone length=..., about the art's size along the "
+                            "bone); the Spine editor drops them on a bone without one")
     elif type == "slider":
         _slider(doc, entry, bone, params)
     elif type == "path":

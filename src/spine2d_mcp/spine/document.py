@@ -92,6 +92,36 @@ def attachment_names(doc: dict, slot: str) -> set[str]:
     return names
 
 
+def _skin_keys(skin: dict | None) -> dict[str, set[str]]:
+    atts = (skin or {}).get("attachments")
+    return {slot: set(named) for slot, named in (atts if isinstance(atts, dict) else {}).items()
+            if isinstance(named, dict)}
+
+
+def default_skin_clashes(doc: dict) -> list[tuple[str, str, str]]:
+    """(skin, slot, name) for each attachment a skin holds under a name the
+    default skin also has in that slot. Runtimes show the skin's, but the
+    Spine editor (4.2 and 4.3) refuses to import them: a name a skin uses is
+    a skin placeholder, and the default skin holds only attachments that are
+    in no placeholder."""
+    default = _skin_keys(find_skin(doc, "default"))
+    return [(skin.get("name"), slot, name) for skin in skins(doc) if skin.get("name") != "default"
+            for slot, names in _skin_keys(skin).items() for name in sorted(names & default.get(slot, set()))]
+
+
+def starting_skin(doc: dict) -> str | None:
+    """The skin to show the skeleton in when slots' setup attachments are not
+    in the default skin (they are skin placeholders): the skin holding the
+    most of them; None when the default skin has them all."""
+    default = _skin_keys(find_skin(doc, "default"))
+    missing = [(s.get("name"), s.get("attachment")) for s in slots(doc)
+               if s.get("attachment") and s.get("attachment") not in default.get(s.get("name"), set())]
+    held = {skin.get("name"): sum(name in _skin_keys(skin).get(slot, set()) for slot, name in missing)
+            for skin in skins(doc) if skin.get("name") != "default"}
+    best = max(held, key=held.get, default=None)
+    return best if missing and best and held[best] else None
+
+
 def kinds(doc: dict) -> tuple[str, ...]:
     """The constraint kinds the document's format version has."""
     return versions.FORMATS[versions.layout(doc)].constraint_kinds
@@ -107,6 +137,22 @@ def all_constraints(doc: dict) -> list[tuple[str, dict]]:
 
 def constraints(doc: dict, kind: str) -> list[dict]:
     return [c for k, c in all_constraints(doc) if k == kind]
+
+
+PHYSICS_TIP = ("rotate", "scaleX", "shearX")
+
+
+def tipless_physics(doc: dict) -> list[tuple[dict, list[str]]]:
+    """(constraint, properties) for physics whose rotate, scaleX or shearX
+    act on a bone without length. They swing the bone's tip, so the Spine
+    editor (4.2 and 4.3) drops them when it imports JSON."""
+    lengths = {b.get("name"): b.get("length", 0) for b in bones(doc)}
+    out = []
+    for c in constraints(doc, "physics"):
+        used = [k for k in PHYSICS_TIP if c.get(k)]
+        if used and not lengths.get(c.get("bone")):
+            out.append((c, used))
+    return out
 
 
 def apply_order(doc: dict) -> list[tuple[str, dict]]:
