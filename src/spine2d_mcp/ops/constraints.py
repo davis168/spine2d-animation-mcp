@@ -202,10 +202,12 @@ def add_constraint(
     existing = {c.get("name"): (k, c) for k, c in d.all_constraints(doc)}
     before = d.never_applied(doc)
     in_skins: list[dict] = []
+    skin_only = False
     if name in existing:
         if not replace:
             raise EditError(f"a {existing[name][0]} constraint named {name!r} already exists (pass replace=true)")
         old_kind = existing[name][0]
+        skin_only = bool(existing[name][1].get("skin"))
         in_skins = [s for s in d.skins(doc) if name in (s.get(old_kind) or [])]
         removed = remove_constraint(doc, name, keep_timelines=True)
         if order is None:
@@ -275,6 +277,8 @@ def add_constraint(
         else:
             _transform(version, params, entry)
 
+    if skin_only:
+        entry["skin"] = True
     position = _insert(doc, version, type, entry, order)
     for skin in in_skins:  # a replaced constraint stays in the skins that had it
         skin.setdefault(type, []).append(name)

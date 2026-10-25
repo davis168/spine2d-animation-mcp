@@ -61,8 +61,10 @@ try {
   setupPose(skeleton);
   skeleton.updateWorldTransform(spine.Physics.update);
   const setup = skeleton.bones.map((b) => [pose(b).worldX, pose(b).worldY]);
+  // A setup attachment only some skins hold shows nothing without them, which is valid.
+  const inSomeSkin = (s) => data.skins.some((skin) => skin.getAttachment(s.data.index, s.data.attachmentName));
   const missing = skeleton.slots
-    .filter((s) => s.data.attachmentName && !attachment(s))
+    .filter((s) => s.data.attachmentName && !attachment(s) && !inSomeSkin(s))
     .map((s) => `${s.data.name}: ${s.data.attachmentName}`);
   if (missing.length) report.errors.push(`setup attachments not found: ${missing.join(", ")}`);
 
@@ -134,7 +136,7 @@ try {
   // Each skin: its setup attachments, and every animation sampled with it,
   // so skin attachments, skin bones and skin constraints are played too.
   if (!poses && data.skins.length > 1) {
-    report.skins = [];
+    report.skin_checks = [];
     for (const skin of data.skins) {
       skeleton.setSkinByName(skin.name);
       setupPose(skeleton);
@@ -155,9 +157,8 @@ try {
           });
         }
       }
-      report.skins.push({ name: skin.name, missing: skinMissing, finite: skinFinite,
+      report.skin_checks.push({ name: skin.name, not_shown: skinMissing, finite: skinFinite,
         max_bone_travel: Number(skinTravel.toFixed(2)) });
-      if (skinMissing.length) report.errors.push(`skin ${skin.name}: setup attachments not found: ${skinMissing.join(", ")}`);
       if (!skinFinite) report.errors.push(`skin ${skin.name}: non-finite bone transforms`);
     }
   }

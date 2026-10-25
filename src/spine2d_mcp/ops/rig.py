@@ -286,6 +286,13 @@ def _check_slot_name(doc: dict, name) -> None:
         raise EditError(f"bad slot name {name!r} (a '/' puts it in a draw order folder: folder/name)")
     if name in d.slot_map(doc):
         raise EditError(f"slot {name!r} already exists")
+    names = _slot_names(doc)
+    if name in d.draw_order_folders(names):
+        raise EditError(f"{name!r} is a draw order folder's name; a slot cannot share it")
+    parts = name.split("/")
+    clash = next(("/".join(parts[:i]) for i in range(1, len(parts)) if "/".join(parts[:i]) in names), None)
+    if clash:
+        raise EditError(f"slot {clash!r} has the name the folder {clash!r} would need; rename it first")
 
 
 def _keep_folders_together(before: list[str], after: list[str]) -> None:
@@ -441,6 +448,9 @@ def rename_folder(doc: dict, name: str, to: str) -> dict:
         raise EditError(f"no draw order folder {name!r} (have {', '.join(folders) or 'none'})")
     if to and any(not part for part in to.split("/")):
         raise EditError(f"bad folder name {to!r}")
+    if to and to != name and (to in folders or to in names):
+        raise EditError(f"{to!r} is already a {'folder' if to in folders else 'slot'}: renaming onto it would merge "
+                        "them; pick another name, or rename the slots one by one")
 
     def moved(path: str) -> str:
         rest = path[len(name) + 1:]

@@ -67,6 +67,7 @@ def world_points(doc: dict, slot: str, att: dict) -> list[tuple[float, float]]:
     vertices = att["vertices"]
     count = len(att["uvs"]) // 2 if "uvs" in att else att["vertexCount"]
     if len(vertices) == 2 * count:
+        require_normal_chain(doc, d.slot_map(doc)[slot]["bone"])
         t = world[d.slot_map(doc)[slot]["bone"]]
         return [t.apply(vertices[i], vertices[i + 1]) for i in range(0, len(vertices), 2)]
     bones = d.bones(doc)
@@ -74,6 +75,7 @@ def world_points(doc: dict, slot: str, att: dict) -> list[tuple[float, float]]:
     while i < len(vertices):
         n, wx, wy = int(vertices[i]), 0.0, 0.0  # counts and indices may be written as floats
         for k in range(i + 1, i + 1 + 4 * n, 4):
+            require_normal_chain(doc, bones[int(vertices[k])]["name"])
             t = world[bones[int(vertices[k])]["name"]]
             px, py = t.apply(vertices[k + 1], vertices[k + 2])
             wx, wy = wx + px * vertices[k + 3], wy + py * vertices[k + 3]
@@ -109,6 +111,8 @@ def _weighted(doc: dict, points: list[tuple[float, float]], weights: list[dict[s
     """The weighted vertices array for world points and per-vertex weights."""
     world = d.world_transforms(doc)
     index = {b["name"]: i for i, b in enumerate(d.bones(doc))}
+    for bone in {b for w in weights for b in w}:
+        require_normal_chain(doc, bone)
     out: list = []
     for (px, py), influences in zip(points, weights):
         items = sorted(influences.items(), key=lambda kv: index[kv[0]])
@@ -141,15 +145,24 @@ def _weights_for(doc: dict, points: list[tuple[float, float]], bones: list[str] 
     if not bones or unknown:
         raise EditError(f"give bones to bind to (no bone {', '.join(map(repr, unknown))})" if unknown
                         else "give bones to bind to")
-    for b in bones:
-        require_normal_chain(doc, b)
     return [_automatic(doc, bones, p) for p in points]
 
 
 def _deform_users(doc: dict, skin: str, slot: str, name: str) -> list[str]:
-    return [anim_name for anim_name, anim in (doc.get("animations") or {}).items()
-            if (((((anim or {}).get("attachments") or {}).get(skin) or {}).get(slot) or {}).get(name) or {})
-            .get("deform")]
+    """Animations with deform keys laid out by this mesh's vertices: its own,
+    and those of linked meshes that link to it."""
+    owners = [(skin, slot, name)]
+    for s in d.skins(doc):
+        for other_slot, atts in (s.get("attachments") or {}).items():
+            for other_name, att in (atts or {}).items():
+                if (isinstance(att, dict) and att.get("type") == "linkedmesh"
+                        and att.get("parent", att.get("source")) == name and att.get("skin", "default") == skin
+                        and att.get("slot", other_slot) == slot):
+                    owners.append((s.get("name"), other_slot, other_name))
+    return [f"{anim_name} ({'/'.join(owner)})" for anim_name, anim in (doc.get("animations") or {}).items()
+            for owner in owners
+            if (((((anim or {}).get("attachments") or {}).get(owner[0]) or {}).get(owner[1]) or {})
+                .get(owner[2]) or {}).get("deform")]
 
 
 def add_mesh(
@@ -210,6 +223,7 @@ def add_mesh(
     att["uvs"] = uvs
     att["triangles"] = triangles
     if bones is not None or weights is not None:
+        require_normal_chain(doc, slot_entry["bone"])
         t = d.world_transforms(doc)[slot_entry["bone"]]
         world_pts = [t.apply(px, py) for px, py in points]
         att["vertices"] = _weighted(doc, world_pts, _weights_for(doc, world_pts, bones, weights))
@@ -281,7 +295,7 @@ def add_linked_mesh(
     if not isinstance(mesh, dict) or mesh.get("type") != "mesh":
         raise EditError(f"no mesh {source!r} in slot {source_slot!r}, skin {owner['name']!r} "
                         "(a linked mesh links to a mesh, not to another linked mesh)")
-    if source_skin == skin and source_slot == slot and source == name:
+    if (source_skin or "default") == skin and source_slot == slot and source == name:
         raise EditError("a linked mesh cannot link to itself")
     atts = slot_attachments(doc, skin, slot, name, replace)
     att: dict = {"type": "linkedmesh"}

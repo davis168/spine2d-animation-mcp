@@ -300,7 +300,8 @@ def edit_rig(project_path: str, operations: list[dict], out_path: str | None = N
     - set_skeleton: referenceScale (physics distances are relative to it),
       fps (the editor's), images, audio (folders relative to the JSON)
     Draw order keys keep showing the same order when slots are added,
-    removed, renamed or reordered. Renamed slots need renaming in game code
+    removed, renamed or reordered (a folder whose slots change says so: before
+    its first key it shows its new setup order). Renamed slots need renaming in game code
     that looks them up by name.
 
     Args:
@@ -592,13 +593,13 @@ def add_mesh(
 
     def edit(doc):
         if source is not None:
-            linked_path = path
-            if not images:  # the source's image
+            linked_path, linked_sequence = path, sequence
+            if not images:  # the source's image (or image sequence)
                 owner = d.find_skin(doc, source_skin or "default") or {}
                 src = ((owner.get("attachments") or {}).get(source_slot or slot) or {}).get(source) or {}
-                linked_path = src.get("path", source)
+                linked_path, linked_sequence = src.get("path", source), src.get("sequence")
             return mesh_ops.add_linked_mesh(doc, slot, name, source, size, skin, linked_path, source_skin,
-                                            source_slot, timelines, set_as_setup, replace, sequence)
+                                            source_slot, timelines, set_as_setup, replace, linked_sequence)
         return mesh_ops.add_mesh(doc, slot, name, size, skin, path, x, y, rotation, 1.0, 1.0, world,
                                  tuple(grid) if grid else None, bones, weights, set_as_setup, replace, sequence)
 

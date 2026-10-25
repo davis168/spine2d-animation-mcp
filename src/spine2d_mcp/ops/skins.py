@@ -31,7 +31,7 @@ def _linked_users(doc: dict, skin: str) -> list[str]:
 
 def add_skin(doc: dict, name: str, copy_from: str | None = None, color: str | None = None) -> dict:
     """A new skin, empty or a copy of another (its attachments, bones and
-    constraints); linked meshes copied from it keep their source skin."""
+    constraints); copied linked meshes keep their source meshes."""
     if not isinstance(name, str) or not name:
         raise EditError("a skin needs a name")
     if d.find_skin(doc, name) is not None:
@@ -40,10 +40,6 @@ def add_skin(doc: dict, name: str, copy_from: str | None = None, color: str | No
     skin["name"] = name
     if color:
         skin["color"] = color
-    for atts in (skin.get("attachments") or {}).values():
-        for att in (atts or {}).values():
-            if isinstance(att, dict) and att.get("type") == "linkedmesh" and "skin" not in att and copy_from:
-                att["skin"] = copy_from  # it linked to its own skin's mesh, which now lives in copy_from
     doc.setdefault("skins", []).append({"name": skin.pop("name"), **skin})
     return {"op": "add_skin", "skin": name, **({"copied_from": copy_from} if copy_from else {})}
 

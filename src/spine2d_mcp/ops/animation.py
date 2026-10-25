@@ -268,6 +268,11 @@ def keep_draw_order_keys(doc: dict, before: list[str], renamed: dict[str, str] |
             if not new:
                 notes.append(f"dropped the draw order keys of folder {folder!r} in {anim_name!r}: the folder is gone")
                 continue
+            if [renamed.get(s, s) for s in old] != new:
+                # Before its first key a folder shows its slots in setup order,
+                # which changed; the keys themselves keep their orders.
+                notes.append(f"folder {folder!r} in {anim_name!r} changed slots or their setup order: its keys "
+                             "keep their orders, but before its first key it now shows the new setup order")
             _rekey(entry.get("keys") or [], old, new, renamed)
             entry["slots"] = new
             kept.append(entry)

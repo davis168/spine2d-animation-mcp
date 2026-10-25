@@ -325,6 +325,92 @@ def test_event_definitions(doc43):
     assert any("events.step.int: must be a whole number" in e for e in _errors(doc43))
 
 
+# ── review findings ─────────────────────────────────────────────────────────
+
+def test_copying_a_skin_keeps_what_linked_meshes_link_to(doc43):
+    meshes.add_mesh(doc43, "arm_left", "arm_left")
+    skins.add_skin(doc43, "red")
+    meshes.add_linked_mesh(doc43, "arm_left", "arm_left", "arm_left", skin="red")  # links to the default mesh
+    skins.add_skin(doc43, "blue", copy_from="red")
+    assert "skin" not in _att(doc43, "arm_left", "arm_left", "blue") and check(doc43) == []
+
+
+@pytest.mark.parametrize("fields", [{"scaleX": 2}, {"scaleY": -1}, {"rotation": 30, "scaleX": 0.5}])
+def test_world_point_rotation_uses_the_whole_bone_matrix(doc43, fields):
+    rig.set_bone(doc43, "head", **fields)
+    shapes.add_point(doc43, "head", "aim", x=0, y=0, rotation=45, world=True)
+    r = math.radians(_att(doc43, "head", "aim").get("rotation", 0))
+    t = d.world_transforms(doc43)["head"]
+    # PointAttachment.computeWorldRotation
+    shown = math.degrees(math.atan2(math.cos(r) * t.c + math.sin(r) * t.d, math.cos(r) * t.a + math.sin(r) * t.b))
+    assert shown == pytest.approx(45, abs=1e-3)
+
+
+def test_a_mesh_cannot_link_to_itself(doc43):
+    meshes.add_mesh(doc43, "arm_left", "arm_left")
+    with pytest.raises(EditError, match="cannot link to itself"):
+        meshes.add_linked_mesh(doc43, "arm_left", "arm_left", "arm_left", replace=True)
+
+
+def test_reweighting_respects_linked_meshes_deform_keys(doc43):
+    meshes.add_mesh(doc43, "arm_left", "arm_left", grid_size=(1, 1))
+    meshes.add_linked_mesh(doc43, "arm_left", "arm2", "arm_left", timelines=False)
+    add_animation(doc43, "a", timelines={"attachments": {"default": {"arm_left": {"arm2": {
+        "deform": [{"vertices": [5, 5, 5, 5, 5, 5, 5, 5]}]}}}}})
+    with pytest.raises(EditError, match="deform keys in a \\(default/arm_left/arm2\\)"):
+        meshes.set_weights(doc43, "arm_left", "arm_left", bones=["arm_left", "hand_left"])
+
+
+def test_weights_need_normal_inherit(doc43):
+    meshes.add_mesh(doc43, "arm_left", "arm_left", grid_size=(1, 1))
+    rig.set_bone(doc43, "arm_left", inherit="noScale")
+    with pytest.raises(EditError, match="only 'normal' chains"):
+        meshes.set_weights(doc43, "arm_left", "arm_left", bones=["hand_left"])
+    with pytest.raises(EditError, match="only 'normal' chains"):
+        meshes.add_mesh(doc43, "arm_left", "arm_left2", size=(10, 10), bones=["hand_left"])
+    with pytest.raises(EditError, match="only 'normal' chains"):  # explicit weights on a noScale bone
+        meshes.add_mesh(doc43, "arm_right", "m", size=(10, 10), grid_size=(1, 1), weights=[{"arm_left": 1}] * 4)
+
+
+def test_replacing_a_skin_constraint_keeps_it_skin_only(doc, doc43):
+    for version_doc in (doc, doc43):
+        con.add_constraint(version_doc, "physics", "sway", bone="head", preset="hair")
+        skins.add_skin(version_doc, "hero")
+        skins.add_to_skin(version_doc, "hero", constraints=["sway"])
+        con.add_constraint(version_doc, "physics", "sway", bone="head", preset="tail", replace=True)
+        (c,) = d.constraints(version_doc, "physics")
+        assert c["skin"] is True and d.find_skin(version_doc, "hero")["physics"] == ["sway"]
+
+
+def test_folder_and_slot_names_stay_apart(doc43):
+    rig.edit_rig(doc43, [{"op": "rename_slot", "name": n, "to": f"arms/{n}"} for n in ("arm_left", "arm_right")]
+                 + [{"op": "rename_slot", "name": n, "to": f"hands/{n}"} for n in ("hand_left", "hand_right")])
+    with pytest.raises(EditError, match="'hands' is already a folder"):
+        rig.rename_folder(doc43, "arms", "hands")
+    with pytest.raises(EditError, match="a draw order folder's name"):
+        rig.rename_slot(doc43, "head", "arms")
+    with pytest.raises(EditError, match="slot 'torso' has the name the folder"):
+        rig.rename_slot(doc43, "head", "torso/head")
+    add_animation(doc43, "a", timelines={"drawOrderFolder": {"arms": [{"time": 0.2, "order": ["arms/arm_right",
+                                                                                              "arms/arm_left"]}]}})
+    done = rig.set_draw_order(doc43, slot="arms/arm_right", index=2)  # reorders the folder's setup order
+    assert "before its first key it now shows the new setup order" in done["notes"][0]
+
+
+@needs_node
+def test_a_setup_attachment_only_some_skins_hold_is_valid(imported43):
+    path = str(imported43.project_path)
+    server.edit_rig(path, [{"op": "add_slot", "name": "hat", "bone": "head"}])
+    doc = d.load(path)
+    doc["skins"].append({"name": "hero", "attachments": {"hat": {"hat": {"path": "head", "width": 80, "height": 80}}}})
+    d.slot_map(doc)["hat"]["attachment"] = "hat"  # shown only with the hero skin
+    d.save(doc, path)
+    result = server.validate_skeleton(path, runtime=True)
+    assert result["ok"], result
+    checks = {s["name"]: s for s in result["runtime"]["skin_checks"]}
+    assert checks["default"]["not_shown"] == ["hat: hat"] and checks["hero"]["not_shown"] == []
+
+
 # ── runtimes, conversion and the editor ─────────────────────────────────────
 
 def _rich(path: str, art: Path, version: str) -> None:
@@ -366,9 +452,9 @@ def test_the_runtime_plays_meshes_paths_and_sequences(version, imported, importe
     assert by_name["burn"]["timelines"] == 1 and by_name["bend"]["finite"]
     orbit = next(a for a in result["runtime"]["animations"] if a["name"] == "orbit")
     assert orbit["max_bone_travel"] == 0  # orb and follow are armor-only and no skin is set
-    per_skin = {s["name"]: s for s in result["runtime"]["skins"]}
+    per_skin = {s["name"]: s for s in result["runtime"]["skin_checks"]}
     assert per_skin["armor"]["max_bone_travel"] > per_skin["default"]["max_bone_travel"]  # the orb moves with armor
-    assert not per_skin["armor"]["missing"]
+    assert not per_skin["armor"]["not_shown"]
     server.edit_skin(path, [{"op": "remove_from_skin", "skin": "armor", "bones": ["orb"], "constraints": ["follow"]}])
     run = _run(Path(path), made.atlas_path, poses=False)
     orbit = next(a for a in run["animations"] if a["name"] == "orbit")

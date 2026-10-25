@@ -55,8 +55,10 @@ def add_point(doc: dict, slot: str, name: str, x: float = 0.0, y: float = 0.0, r
     entry = _slot(doc, slot)
     if world:
         (x, y), = to_bone_space(doc, slot, [(x, y)])
+        # The runtime turns (cos r, sin r) by the bone's matrix; invert that.
         t = d.world_transforms(doc)[entry["bone"]]
-        rotation -= math.degrees(math.atan2(t.c, t.a))
+        lx, ly = t.inverse_vector(math.cos(math.radians(rotation)), math.sin(math.radians(rotation)))
+        rotation = math.degrees(math.atan2(ly, lx))
     atts = slot_attachments(doc, skin, slot, name, replace)
     att: dict = {"type": "point"}
     for key, value in (("x", x), ("y", y), ("rotation", rotation)):
