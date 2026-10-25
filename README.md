@@ -1,12 +1,12 @@
 # spine2d-mcp
 
-An MCP server that builds, edits, checks and renders [Spine](http://esotericsoftware.com/) 4.2 characters: from a layered PSD to a rigged, animated skeleton that loads in the Spine editor and in spine-phaser-v4 4.2.x.
+An MCP server that builds, edits, checks, converts and renders [Spine](http://esotericsoftware.com/) characters in format **4.2 or 4.3**: from a layered PSD to a rigged, animated skeleton that loads in the Spine editor and in the game's own Spine runtime (spine-phaser-v4, spine-player, ...).
 
 The goal is to cut the manual rig-and-animate work for a character from days down to roughly an hour.
 
 ## Status
 
-PSD → rig → animations → checked → previewed, end to end through MCP tools. Every editing tool checks its result against the Spine 4.2 format before writing. Generated skeletons import into the Spine editor (verified with Spine 4.2.43 and 4.3.26 via the CLI), round-trip through the 4.2.43 editor's export, and load and play in spine-core 4.2.120, the runtime spine-phaser-v4 4.2.x ships. Not yet verified in a Phaser game or in Unity.
+PSD → rig → animations → checked → previewed, end to end through MCP tools, in either format version. Every editing tool checks its result against the skeleton's own format before writing. Generated 4.2 skeletons round-trip through the Spine 4.2.43 editor (CLI import, then JSON export) and play in spine-core 4.2.120; 4.3 skeletons, sliders included, round-trip through Spine 4.3.26 and play in spine-core 4.3.13. Converted skeletons are checked pose by pose in both runtimes. Not yet verified in a Phaser game or in Unity.
 
 The Spine editor has no live scripting API, so the server works on the files (skeleton JSON, atlas, images) and drives the editor through its command line interface.
 
@@ -16,15 +16,16 @@ The Spine editor has no live scripting API, so the server works on the files (sk
 |---|---|
 | `import_psd_to_spine` | Layered PSD → skeleton JSON, atlas, page PNG(s) and per-part images |
 | `inspect_skeleton` | Bones (setup and world positions), slots in draw order, skins, constraints, events, and what each animation keys |
-| `validate_skeleton` | Spine 4.2 format check; `runtime=true` also loads and plays it in spine-core 4.2.120 |
+| `validate_skeleton` | Format check against the file's version, plus whether it matches the game project's; `runtime=true` also loads and plays it in that version's spine-core |
 | `add_animation` / `remove_animation` | Presets (idle, walk, wave, jump) or keyframes with an easing shorthand; preset + keyframe overrides |
 | `edit_rig` | Add/set/rename/remove bones, move a pivot without moving the art, reparent, add/set/remove slots, draw order |
-| `add_constraint` / `remove_constraint` | IK, transform and physics constraints (physics presets: hair, cloth, tail, antenna, jiggle) |
+| `add_constraint` / `remove_constraint` | IK, transform, physics and (4.3) slider constraints (physics presets: hair, cloth, tail, antenna, jiggle) |
 | `add_attachment` | Add a PNG as a region attachment on a slot (mouth shapes, alternate hands) and repack the atlas |
 | `pack_atlas` | Repack the atlas from the images folder |
-| `spine_import` | Import the JSON into a `.spine` project with the Spine CLI |
+| `convert_skeleton` | Convert a skeleton between 4.2 and 4.3 into a new file; refuses a lossy conversion unless agreed; verifies poses in both runtimes |
+| `spine_import` | Import the JSON into a `.spine` project with the Spine CLI, using an editor of the file's version |
 | `spine_export` | Render PNG frame sequences or GIFs, or export JSON/binary, with the Spine CLI |
-| `preview_html` | A self-contained Spine Web Player 4.2 page (skeleton, atlas and images embedded) |
+| `preview_html` | A self-contained Spine Web Player page in the file's version (skeleton, atlas and images embedded) |
 
 A typical session, in plain language to Claude: *"Import /path/to/hero.psd, add the idle, walk and wave presets, validate with the runtime check, export GIFs and make a preview."*
 
@@ -32,7 +33,7 @@ A typical session, in plain language to Claude: *"Import /path/to/hero.psd, add 
 
 Layers named after body parts (`head`, `body`/`torso`, `arm_left`, `hand_right`, `leg_left`, `foot_right`, …) become:
 
-- `<name>.json`: Spine 4.2 skeleton (bones, slots, default skin, region attachments)
+- `<name>.json`: the skeleton (bones, slots, default skin, region attachments) in the game project's format version
 - `<name>.atlas` and `<name>.png`: the atlas, on the smallest power-of-two page that fits
 - `images/<part>.png`: one image per attachment; the Spine editor displays these, and the skeleton's `images` path points here
 
@@ -46,7 +47,7 @@ Rig conventions:
 
 ### Animations
 
-`add_animation` takes Spine 4.2 animation JSON plus one convenience: a key may carry `"ease"` instead of a raw curve. As in Spine, a key's easing shapes the segment that starts at it. Easing names: `linear`, `stepped`, `in`, `out`, `inout`, `smooth`, `back`, or `[x1, y1, x2, y2]` (CSS cubic-bezier); the tool computes the absolute per-channel bezier handles Spine stores. Rotations use `value` in degrees (CCW); `angle` (the 3.x key, which 4.2 silently reads as 0) is rejected.
+`add_animation` takes Spine animation JSON (in the skeleton's format version) plus one convenience: a key may carry `"ease"` instead of a raw curve. As in Spine, a key's easing shapes the segment that starts at it. Easing names: `linear`, `stepped`, `in`, `out`, `inout`, `smooth`, `back`, or `[x1, y1, x2, y2]` (CSS cubic-bezier); the tool computes the absolute per-channel bezier handles Spine stores. Rotations use `value` in degrees (CCW); `angle` (the 3.x key, which 4.x silently reads as 0) is rejected.
 
 ```json
 {"bones": {"head": {"rotate": [{"time": 0, "value": 0, "ease": "inout"},
@@ -61,20 +62,29 @@ Presets are tuned for importer rigs and scale with the skeleton's height: `idle`
 
 - **IK** aims a bone's x axis at the target, so it suits rigs whose bones point along their limbs. Importer rigs have unrotated bones; `add_constraint` warns when the setup pose would swing. Aim importer limbs with rotate keys.
 - **Path constraints** are preserved and checked but cannot be added (they need path attachments).
+- **4.3 extras the tools keep and check but do not create**: clipping `convex`/`inverse`, draw order folders, and linked meshes whose source mesh is in another slot.
 - `move_pivot`, reparenting and slot rebinding work in world space and require `inherit: normal` along the chain.
 
 ## Spine versions
 
-This project targets the **Spine 4.2** line: a runtime loads only data from its own major.minor version.
+A Spine runtime loads only skeleton data of its own **format version** (the major.minor in `skeleton.spine`: 4.2, 4.3) and never checks it, so this server handles each skeleton in the version it is written in. Supported: **4.2 and 4.3**, the stable releases (betas never count; a newer version is added once it is stable). See [ADR 0001](docs/adr/0001-each-skeleton-in-its-own-format-version.md).
 
-- **Phaser 4**: `npm i @esotericsoftware/spine-phaser-v4@v4.2-latest` (4.2.x needs Phaser ≥ 4.1). The untagged `latest` is the 4.3 line and will not load 4.2 data.
-- **Spine editor**: JSON and binary exports carry the exporting editor's version. Run a 4.2 editor for round trips: set `SPINE_EDITOR_VERSION` (e.g. `4.2.43`, a version the Spine launcher has downloaded) or pass `editor_version`. `spine_export` warns when a newer editor exported the data. Saving a project in a newer editor upgrades it.
+| Format | Spine editor | spine-core / spine-player | Phaser 4 runtime |
+|---|---|---|---|
+| 4.2 | 4.2.43 | 4.2.120 | `@esotericsoftware/spine-phaser-v4@v4.2-latest` (Phaser ≥ 4.1) |
+| 4.3 | 4.3.26 | 4.3.13 | `@esotericsoftware/spine-phaser-v4@latest` (Phaser ≥ 4.2.1) |
+
+- **Existing files** are edited, checked, previewed and run in their own version.
+- **New files** (`import_psd_to_spine`, data exported from a `.spine` project) take, in order: the `format_version` you pass; the **game project's version**, found by searching up from the output folder to the repository root for a `package.json` with an `@esotericsoftware/spine-*` dependency (the installed release first, else a range that pins one version: `~4.2.0` counts, `^4.2.0` does not, since a fresh install of it gets 4.3) or a `.spine-version` file holding e.g. `4.3`; then `$SPINE_FORMAT_VERSION`.
+- **When in doubt, the tools ask.** If nothing says, the signals disagree, or a file's version differs from its game project's, the tool writes nothing and returns `needs_answer` with a question and options; the agent asks you in chat. An answer about an undeclared project can be saved as its `.spine-version`. If you already named a version in your request, the agent uses it without asking (`allow_version_mismatch`) and mentions the difference once.
+- **Converting** is explicit: `convert_skeleton` writes `hero-4.3.json` (and `hero-4.3.atlas`) next to `hero.json`. 4.2 → 4.3 loses nothing; 4.3 → 4.2 lists what 4.2 cannot hold (sliders, transform property mappings, scale modes, ...) and drops it only if you agree.
+- **Spine editor**: an editor imports JSON of its own version only, so the CLI tools pick one per file: `editor_version`, else a matching release in `SPINE_EDITOR_VERSION` (one or several, e.g. `4.2.43,4.3.26`), else the newest stable release the Spine launcher has downloaded. New files carry that full release in `skeleton.spine` (e.g. `4.3.26`), because the 4.3 editor warns on any other value; runtimes read only the major.minor.
 - `SPINE_EXECUTABLE` points at the Spine executable when it is not in the standard place (`/Applications/Spine.app/Contents/MacOS/Spine` on macOS).
 
 ## Requirements
 
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
-- Optional: Node.js with npm, for the runtime check (spine-core 4.2.120 is installed on first use into `~/.cache/spine2d-mcp`, or `$SPINE2D_MCP_CACHE`)
+- Optional: Node.js with npm, for the runtime check and the conversion check (spine-core 4.2.120 and 4.3.13 are installed on first use into `~/.cache/spine2d-mcp`, or `$SPINE2D_MCP_CACHE`)
 - Optional: the Spine editor (Essential or Professional), for `spine_import` and `spine_export`
 
 ## Setup and tests
@@ -90,10 +100,10 @@ Tests that need Node or the Spine editor skip when they are not installed.
 
 Register the server with an absolute path to `uv`; Claude Desktop starts servers with a minimal `PATH`, so a bare `uv` fails with `spawn uv ENOENT`. Find yours with `which uv`.
 
-**Claude Code** (`--scope user` makes it available in every project; `-e` sets the editor version for the CLI tools):
+**Claude Code** (`--scope user` makes it available in every project; the optional `-e` pins editor releases for the CLI tools, which otherwise use the newest installed one per version):
 
 ```bash
-claude mcp add --scope user spine2d -e SPINE_EDITOR_VERSION=4.2.43 -- /absolute/path/to/uv --directory /absolute/path/to/spine2d-animation-mcp run spine2d-mcp
+claude mcp add --scope user spine2d -e SPINE_EDITOR_VERSION=4.2.43,4.3.26 -- /absolute/path/to/uv --directory /absolute/path/to/spine2d-animation-mcp run spine2d-mcp
 ```
 
 Run `/mcp` in a new session to check it is connected.
@@ -105,7 +115,7 @@ Run `/mcp` in a new session to check it is connected.
   "spine2d": {
     "command": "/absolute/path/to/uv",
     "args": ["--directory", "/absolute/path/to/spine2d-animation-mcp", "run", "spine2d-mcp"],
-    "env": {"SPINE_EDITOR_VERSION": "4.2.43"}
+    "env": {"SPINE_EDITOR_VERSION": "4.2.43,4.3.26"}
   }
 }
 ```
@@ -117,9 +127,10 @@ src/spine2d_mcp/
   server.py            FastMCP server: tool definitions
   pipeline.py          PSD -> Spine project orchestration
   edits.py             load -> change -> check -> save for every editing tool
+  project.py           a game project's format version, and when to ask
   preview.py           Spine Web Player page
   spine_cli.py         Spine editor CLI: import, export, project info
-  runtime/             spine-core 4.2 runtime check (Node script + wrapper)
+  runtime/             spine-core runtime check and pose comparison (Node script + wrapper)
   ops/                 edits as pure functions: animation, rig, constraints, attachments
   psd/parser.py        PSD -> flat layer list (+ pivot markers)
   psd/conventions.py   bone hierarchy, joint sides, cap pivots, [pivot] tag
@@ -127,18 +138,21 @@ src/spine2d_mcp/
   spine/builder.py     layers -> SpineProject
   spine/writer.py      SpineProject -> JSON
   spine/validator.py   importer-level structural validation
-  spine/document.py    skeleton JSON as a dict: load, save, world transforms
-  spine/check.py       Spine 4.2 format checker
+  spine/versions.py    supported format versions and their editor/runtime releases
+  spine/document.py    skeleton JSON as a dict (either constraint layout): load, save, world transforms
+  spine/check.py       format checker, per version
+  spine/convert.py     4.2 <-> 4.3 conversion
   spine/inspect.py     skeleton summary for inspect_skeleton
-  spine/animation.py   easing shorthand -> Spine 4.2 animation JSON
+  spine/animation.py   easing shorthand -> Spine animation JSON
   spine/presets.py     idle, walk, wave, jump
   atlas/packer.py      rectpack bin packing
   atlas/writer.py      .atlas text + composite PNG
-reference/             SkeletonJson.java (spine-runtimes 4.2), spineboy.atlas
-tests/                 pytest suite (synthetic PSD fixtures)
+reference/             SkeletonJson-4.2.java, SkeletonJson-4.3.java (spine-runtimes), spineboy.atlas
+docs/adr/              decisions
+tests/                 pytest suite (synthetic PSD fixtures, a 4.2 rig using every constraint kind)
 ```
 
-Format source of truth: `reference/SkeletonJson.java` (spine-runtimes 4.2).
+Format source of truth: `reference/SkeletonJson-4.2.java` and `reference/SkeletonJson-4.3.java` (spine-runtimes 4.2 and 4.3).
 
 ## License
 
