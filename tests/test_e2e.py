@@ -24,9 +24,12 @@ def test_pipeline_uses_atlas_extension_not_txt(synthetic_psd, tmp_path):
 
 
 def test_pipeline_json_is_valid_spine(synthetic_psd, tmp_path):
-    result = import_psd_to_spine(synthetic_psd, str(tmp_path / "out"))
+    result = import_psd_to_spine(synthetic_psd, str(tmp_path / "out"), format_version="4.2")
     data = json.loads(result.project_path.read_text())
-    assert data["skeleton"]["spine"] == "4.2"
+    # the release of the editor that imports it (4.2.43 here), which runtimes read as 4.2
+    assert data["skeleton"]["spine"].startswith("4.2.")
+    newest = import_psd_to_spine(synthetic_psd, str(tmp_path / "out43"))
+    assert json.loads(newest.project_path.read_text())["skeleton"]["spine"].startswith("4.3.")
     bone_names = {b["name"] for b in data["bones"]}
     assert "root" in bone_names and "torso" in bone_names
     # every slot's bone exists; every attachment slot exists
@@ -68,6 +71,7 @@ def test_pipeline_writes_part_images_for_editor(synthetic_psd, tmp_path):
 def test_mcp_tool_wrapper(synthetic_psd, tmp_path):
     from spine2d_mcp.server import import_psd_to_spine as tool
 
-    res = tool(synthetic_psd, str(tmp_path / "out"))
-    assert set(res) == {"project_path", "atlas_path", "png_paths", "images_dir"}
-    assert res["project_path"].endswith(".json")
+    (tmp_path / ".git").mkdir()  # a repository with no Spine version declared
+    res = tool(synthetic_psd, str(tmp_path / "out"), format_version="4.2")
+    assert {"project_path", "atlas_path", "png_paths", "images_dir", "format_version"} <= set(res)
+    assert res["project_path"].endswith(".json") and res["format_version"] == "4.2"

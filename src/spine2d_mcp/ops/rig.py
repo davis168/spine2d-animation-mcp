@@ -228,10 +228,11 @@ def rename_bone(doc: dict, name: str, to: str) -> dict:
         if s.get("bone") == name:
             s["bone"] = to
     for kind, c in d.all_constraints(doc):
-        if c.get("bone") == name:
+        if c.get("bone") == name:  # physics, slider
             c["bone"] = to
-        if kind != "path" and c.get("target") == name:  # a path constraint targets a slot
-            c["target"] = to
+        key = d.target_bone_key(doc, kind)  # a path constraint follows a slot, not a bone
+        if key and c.get(key) == name:
+            c[key] = to
         if "bones" in c:
             c["bones"] = [to if b == name else b for b in c["bones"]]
     for skin in d.skins(doc):
@@ -252,7 +253,7 @@ def remove_bone(doc: dict, name: str) -> dict:
     users += [f"slot {s['name']}" for s in d.slots(doc) if s.get("bone") == name]
     users += [f"{k} {c['name']}" for k, c in d.all_constraints(doc)
               if c.get("bone") == name or name in (c.get("bones") or [])
-              or (k != "path" and c.get("target") == name)]
+              or (d.target_bone_key(doc, k) and c.get(d.target_bone_key(doc, k)) == name)]
     if users:
         raise EditError(f"bone {name!r} is used by {', '.join(users)}")
     _reorder_bones(doc, [b["name"] for b in d.bones(doc) if b["name"] != name])
@@ -320,12 +321,20 @@ def _rebind_slot(doc: dict, name: str, bone: str) -> None:
 
 def remove_slot(doc: dict, name: str) -> dict:
     _slot(doc, name)
-    users = [f"path constraint {c['name']}" for c in d.constraints(doc, "path") if c.get("target") == name]
+    slot_key = d.path_slot_key(doc)
+    users = [f"path constraint {c['name']}" for c in d.constraints(doc, "path") if c.get(slot_key) == name]
     users += [f"clipping {skin.get('name')}/{slot}/{att_name}"
               for skin in d.skins(doc) for slot, atts in (skin.get("attachments") or {}).items()
               for att_name, att in (atts or {}).items() if (att or {}).get("end") == name]
+    users += [f"linked mesh {skin.get('name')}/{slot}/{att_name}"  # 4.3: a source mesh in another slot
+              for skin in d.skins(doc) for slot, atts in (skin.get("attachments") or {}).items()
+              for att_name, att in (atts or {}).items()
+              if (att or {}).get("type") == "linkedmesh" and att.get("slot") == name and slot != name]
     users += [f"drawOrder keys of {anim_name}" for anim_name, anim in (doc.get("animations") or {}).items()
               if any(o.get("slot") == name for k in (anim or {}).get("drawOrder") or [] for o in k.get("offsets") or [])]
+    users += [f"draw order folder {folder} of {anim_name}" for anim_name, anim in (doc.get("animations") or {}).items()
+              for folder, spec in ((anim or {}).get("drawOrderFolder") or {}).items()
+              if name in ((spec or {}).get("slots") or [])]
     if users:
         raise EditError(f"slot {name!r} is still used by {', '.join(users)}; change those first")
     doc["slots"] = [s for s in d.slots(doc) if s["name"] != name]
@@ -358,10 +367,11 @@ def set_draw_order(doc: dict, order: list[str] | None = None, slot: str | None =
 
 
 def _draw_order_note(doc: dict) -> dict:
-    keyed = [n for n, a in (doc.get("animations") or {}).items() if (a or {}).get("drawOrder")]
+    keyed = [n for n, a in (doc.get("animations") or {}).items()
+             if (a or {}).get("drawOrder") or (a or {}).get("drawOrderFolder")]
     if not keyed:
         return {}
-    return {"note": f"drawOrder keys in {', '.join(keyed)} are offsets from the setup order; re-check them"}
+    return {"note": f"draw order keys in {', '.join(keyed)} are offsets from the setup order; re-check them"}
 
 
 _OPS = {

@@ -1,0 +1,85 @@
+{
+  "skeleton": {"spine": "4.2.43", "width": 600, "height": 400, "images": "./images/"},
+  "bones": [
+    {"name": "root"},
+    {"name": "driver", "parent": "root", "y": 100, "length": 50},
+    {"name": "tail", "parent": "driver", "x": 50, "length": 40},
+    {"name": "tail2", "parent": "tail", "x": 40, "length": 30},
+    {"name": "t_abs_b", "parent": "root", "x": -100, "y": 50, "length": 30},
+    {"name": "t_rel_b", "parent": "root", "x": -100, "y": 100, "length": 30},
+    {"name": "t_loc_b", "parent": "root", "x": -100, "y": 150, "length": 30},
+    {"name": "t_locrel_b", "parent": "root", "x": -100, "y": 200, "length": 30},
+    {"name": "t_partial_b", "parent": "root", "x": -100, "y": 250, "length": 30},
+    {"name": "thigh", "parent": "root", "x": 100, "y": 200, "rotation": -90, "length": 80},
+    {"name": "shin", "parent": "thigh", "x": 80, "length": 80},
+    {"name": "ik_t", "parent": "root", "x": 100, "y": 60},
+    {"name": "arm", "parent": "root", "x": 200, "y": 100, "length": 60},
+    {"name": "arm_t", "parent": "root", "x": 300, "y": 100},
+    {"name": "path1", "parent": "root", "y": -50, "length": 20},
+    {"name": "path2", "parent": "path1", "x": 20, "length": 20}
+  ],
+  "slots": [
+    {"name": "body", "bone": "driver", "attachment": "skin"},
+    {"name": "body_alt", "bone": "driver"},
+    {"name": "path", "bone": "root", "attachment": "path"}
+  ],
+  "ik": [
+    {"name": "leg", "order": 2, "bones": ["thigh", "shin"], "target": "ik_t", "softness": 5, "stretch": true,
+     "uniform": true},
+    {"name": "reach", "order": 3, "bones": ["arm"], "target": "arm_t", "compress": true, "stretch": true,
+     "uniform": true}
+  ],
+  "transform": [
+    {"name": "t_abs", "order": 0, "bones": ["t_abs_b"], "target": "driver", "rotation": 10, "x": 5,
+     "mixScaleX": 0.5},
+    {"name": "t_rel", "order": 1, "bones": ["t_rel_b"], "target": "driver", "relative": true, "mixRotate": 0.3},
+    {"name": "t_loc", "order": 4, "bones": ["t_loc_b"], "target": "driver", "local": true, "scaleX": 0.2},
+    {"name": "t_locrel", "order": 5, "bones": ["t_locrel_b"], "target": "driver", "local": true,
+     "relative": true, "shearY": 4},
+    {"name": "t_partial", "order": 6, "bones": ["t_partial_b"], "target": "driver", "mixRotate": 0.5,
+     "mixX": 0, "mixScaleX": 0.3, "mixShearY": 0}
+  ],
+  "path": [
+    {"name": "pc", "order": 7, "bones": ["path1", "path2"], "target": "path", "mixX": 0.5}
+  ],
+  "physics": [
+    {"name": "tail_phys", "order": 8, "bone": "tail", "rotate": 1, "strength": 80},
+    {"name": "tail2_phys", "order": 9, "bone": "tail2", "x": 0.5, "y": 0.5, "inertia": 0.5, "damping": 0.85}
+  ],
+  "skins": [
+    {"name": "default", "attachments": {
+      "body": {
+        "skin": {"type": "mesh", "uvs": [0, 0, 1, 0, 1, 1, 0, 1], "triangles": [0, 1, 2, 0, 2, 3],
+                 "vertices": [-20, -20, 20, -20, 20, 20, -20, 20], "hull": 4, "width": 40, "height": 40},
+        "skin_alt": {"type": "linkedmesh", "parent": "skin", "width": 40, "height": 40}
+      },
+      "path": {
+        "path": {"type": "path", "vertexCount": 6, "lengths": [180, 360],
+                 "vertices": [-100, -50, -50, 0, 50, -100, 100, -50, 150, 0, 200, -50]}
+      }
+    }}
+  ],
+  "animations": {
+    "move": {
+      "bones": {
+        "driver": {
+          "rotate": [{"value": 0, "curve": [0.25, 0, 0.75, 60]}, {"time": 1, "value": 60}, {"time": 2, "value": 0}],
+          "translate": [{"x": 0, "y": 0}, {"time": 1, "x": 40, "y": 20}, {"time": 2, "x": 0, "y": 0}],
+          "scale": [{}, {"time": 1, "x": 1.5, "y": 0.8}, {"time": 2}],
+          "shear": [{}, {"time": 1, "x": 10, "y": 5}, {"time": 2}]
+        },
+        "ik_t": {"translate": [{}, {"time": 1, "y": -260}, {"time": 2}]},
+        "arm_t": {"translate": [{}, {"time": 1, "x": 150, "y": 50}, {"time": 2}]}
+      },
+      "slots": {"body": {"attachment": [{"time": 1, "name": "skin_alt"}]}},
+      "ik": {"leg": [{"softness": 5, "stretch": true}, {"time": 1, "mix": 0.5, "stretch": true},
+                     {"time": 2, "softness": 5, "stretch": true}]},
+      "transform": {"t_abs": [{"mixScaleX": 0.5}, {"time": 1, "mixRotate": 0.5}, {"time": 2, "mixScaleX": 0.5}]},
+      "path": {"pc": {
+        "position": [{}, {"time": 2, "value": 0.8}],
+        "mix": [{"mixX": 0.5}, {"time": 1, "mixRotate": 0.5}]
+      }},
+      "physics": {"tail_phys": {"mix": [{}, {"time": 1, "value": 1}, {"time": 2, "value": 0.5}]}}
+    }
+  }
+}

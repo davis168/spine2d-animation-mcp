@@ -1,4 +1,5 @@
 from spine2d_mcp.spine.schema import (
+    Skeleton,
     Bone,
     IkConstraint,
     RegionAttachment,
@@ -65,8 +66,11 @@ def test_skin_name_always_emitted():
 
 
 def test_skeleton_version_present():
+    """New skeletons default to the newest supported format version; the
+    importer sets the version the game project needs."""
     out = to_dict(SpineProject())
-    assert out["skeleton"]["spine"] == "4.2"
+    assert out["skeleton"]["spine"] == "4.3"
+    assert to_dict(SpineProject(skeleton=Skeleton(spine="4.2")))["skeleton"]["spine"] == "4.2"
 
 
 def test_roundtrip_through_json():

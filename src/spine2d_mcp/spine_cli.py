@@ -2,10 +2,13 @@
 scripting API; files plus the CLI are how it is automated).
 
 The executable comes from `$SPINE_EXECUTABLE`, else the standard install
-locations. The editor version comes from the `editor_version` argument or
-`$SPINE_EDITOR_VERSION` (passed as `-u`); without one the launcher starts its
-default version. JSON and binary exports carry the exporting editor's version,
-so for spine-phaser-v4 4.2.x export with a 4.2 editor.
+locations. An editor imports skeleton JSON of its own format version only,
+and exports data in it, so the editor (passed to the launcher as `-u`) is
+chosen per file: the `editor_version` argument, else a release of that
+format version listed in `$SPINE_EDITOR_VERSION` (one or several,
+comma-separated, e.g. "4.2.43,4.3.26"), else the newest stable release of it
+the launcher has downloaded (betas are skipped), else the release the tools
+are tested with (the launcher downloads it).
 """
 
 from __future__ import annotations
@@ -21,11 +24,19 @@ from pathlib import Path
 
 from PIL import Image
 
+from .spine import versions
+
 _CANDIDATES = (
     "/Applications/Spine.app/Contents/MacOS/Spine",
     r"C:\Program Files\Spine\Spine.com",
     r"C:\Program Files (x86)\Spine\Spine.com",
 )
+# Where the Spine launcher keeps the editor releases it has downloaded.
+_UPDATES = (
+    Path.home() / "Library" / "Application Support" / "Spine" / "updates",  # macOS
+    Path.home() / "Spine" / "updates",  # Windows, Linux
+)
+_STABLE = re.compile(r"^\d+\.\d+\.\d+$")
 _FRAME = re.compile(r"^(?P<prefix>.+)_(?P<index>\d+)\.png$")
 
 
@@ -58,12 +69,60 @@ def find_spine() -> str | None:
     return shutil.which("Spine") or shutil.which("spine")
 
 
+def _release_key(version: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in version.split("."))
+
+
+def installed_editors() -> list[str]:
+    """Stable editor releases the launcher has downloaded, oldest first."""
+    found: set[str] = set()
+    for folder in _UPDATES:
+        if folder.is_dir():
+            found.update(p.name for p in folder.iterdir() if _STABLE.match(p.name))
+    return sorted(found, key=_release_key)
+
+
+def editor_for(format_version: str | None, editor_version: str | None = None) -> str | None:
+    """The editor release to run for skeleton data of `format_version` (None:
+    any supported version, newest first)."""
+    if editor_version:
+        if format_version and versions.major_minor(editor_version) != format_version:
+            raise SpineCliError(
+                f"editor {editor_version} reads and writes format {versions.major_minor(editor_version)}, but this "
+                f"is {format_version} data: the Spine editor imports only its own format version (use a "
+                f"{format_version}.x editor, e.g. {versions.get(format_version).editor})")
+        return editor_version
+    wanted = [format_version] if format_version else list(reversed(versions.SUPPORTED))
+    listed = [v.strip() for v in os.environ.get("SPINE_EDITOR_VERSION", "").split(",") if v.strip()]
+    installed = installed_editors()
+    for version in wanted:
+        for release in listed:
+            if versions.major_minor(release) == version:
+                return release
+        matching = [r for r in installed if versions.major_minor(r) == version]
+        if matching:
+            return matching[-1]
+    return versions.get(format_version).editor if format_version else None
+
+
+def json_version(path: str | Path) -> str:
+    """The format version of a skeleton JSON file, if supported."""
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SpineCliError(f"cannot read {path}: {e}") from None
+    version = versions.of(doc) if isinstance(doc, dict) else None
+    if not versions.is_supported(version):
+        raise SpineCliError(f"{Path(path).name}: format version {version!r} is not supported "
+                            f"(supported: {versions.supported_text()})")
+    return version
+
+
 def run_spine(args: list[str], editor_version: str | None = None, timeout: int = 900) -> SpineRun:
     exe = find_spine()
     if exe is None:
         raise SpineCliError("Spine not found: install it or set SPINE_EXECUTABLE to the Spine executable")
-    version = editor_version or os.environ.get("SPINE_EDITOR_VERSION")
-    cmd = [exe, *(["-u", version] if version else []), *args]
+    cmd = [exe, *(["-u", editor_version] if editor_version else []), *args]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     lines = [ln.rstrip() for ln in (proc.stdout + proc.stderr).splitlines() if ln.strip()]
     editor = next((m.group(1) for ln in lines if (m := re.match(r"Starting: Spine (\S+)", ln))), None)
@@ -102,12 +161,13 @@ def spine_import(
     editor_version: str | None = None,
 ) -> dict:
     project_path = Path(project_path)
+    version = json_version(project_path)
     target = Path(spine_project) if spine_project else project_path.with_suffix(".spine")
     args = ["-i", str(project_path), "-o", str(target), "-r"]
     if skeleton_name:
         args.append(skeleton_name)
-    run = run_spine(args, editor_version)
-    return _result(run, spine_project=str(target))
+    run = run_spine(args, editor_for(version, editor_version))
+    return _result(run, spine_project=str(target), format_version=version)
 
 
 def _png_settings(input_path: Path, output: Path, skeleton: str, fps: int, scale: float, background: str | None) -> dict:
@@ -154,27 +214,41 @@ def spine_export(
     scale: float = 100,
     background: str | None = "ffffffff",
     editor_version: str | None = None,
+    format_version: str | None = None,
 ) -> dict:
     """Export with the Spine CLI: png (frame sequences), gif (encoded from the
-    frames), json or binary (skeleton data in the editor's version)."""
+    frames), json or binary (skeleton data in the editor's format version).
+
+    A JSON input is opened by an editor of its own format version, so its
+    exports keep that version; a .spine project is opened by an editor of
+    `format_version` (default: the newest installed supported one)."""
     input_path, output_dir = Path(input_path), Path(output_dir)
+    if format not in ("png", "gif", "json", "binary"):
+        raise SpineCliError("format must be png, gif, json or binary")
+    if input_path.suffix.lower() == ".json":
+        version = json_version(input_path)
+        if format_version and versions.get(format_version).version != version:
+            raise SpineCliError(f"{input_path.name} is format {version}; exporting keeps that version "
+                                "(convert_skeleton converts skeleton JSON between versions)")
+    else:
+        version = versions.get(format_version).version if format_version else None
+    editor = editor_for(version, editor_version)
     output_dir.mkdir(parents=True, exist_ok=True)
     if format in ("json", "binary"):
-        run = run_spine(["-i", str(input_path), "-o", str(output_dir), "-e", format], editor_version)
+        run = run_spine(["-i", str(input_path), "-o", str(output_dir), "-e", format], editor)
         out = _result(run, output_dir=str(output_dir),
                       files=sorted(str(p) for p in output_dir.iterdir() if p.is_file()))
-        if run.editor and not run.editor.startswith("4.2"):
+        exported = versions.major_minor(run.editor) if run.editor else None
+        out["format_version"] = exported
+        if version and exported and exported != version:
             out.setdefault("warnings", []).append(
-                f"exported by Spine {run.editor}: the data is {run.editor.rsplit('.', 1)[0]}, which spine-phaser-v4 "
-                "4.2.x cannot load; pass editor_version (a 4.2.x release) to export 4.2 data")
+                f"exported by Spine {run.editor}: the data is format {exported}, not the {version} asked for")
         return out
-    if format not in ("png", "gif"):
-        raise SpineCliError("format must be png, gif, json or binary")
 
-    if input_path.suffix == ".json":
+    if input_path.suffix.lower() == ".json":
         skeleton = input_path.stem
     else:
-        skeletons = project_info(input_path, editor_version).get("skeletons") or []
+        skeletons = project_info(input_path, editor).get("skeletons") or []
         if not skeletons:
             raise SpineCliError(f"no skeleton found in {input_path}")
         skeleton = skeletons[0]
@@ -185,7 +259,7 @@ def spine_export(
     settings_file = Path(settings_name)
     try:
         settings_file.write_text(json.dumps(_png_settings(input_path, frames_dir, skeleton, fps, scale, background)))
-        run = run_spine(["-e", str(settings_file)], editor_version)
+        run = run_spine(["-e", str(settings_file)], editor)
         groups = _group_frames(frames_dir, skeleton)
         if animations:
             unknown = sorted(set(animations) - set(groups))

@@ -2,7 +2,8 @@
 
 The skeleton, atlas and page images are embedded as data URIs, so the page
 opens straight from disk; only the player script and stylesheet come from the
-CDN, pinned to the 4.2 line the project ships with.
+CDN, pinned to the player release of the skeleton's format version (a 4.2
+file plays in spine-player 4.2.120, a 4.3 file in 4.3.13).
 """
 
 from __future__ import annotations
@@ -12,8 +13,16 @@ import html
 import json
 from pathlib import Path
 
-PLAYER_VERSION = "4.2.120"
-_CDN = f"https://unpkg.com/@esotericsoftware/spine-player@{PLAYER_VERSION}/dist"
+from .spine import versions
+
+
+def player_version(skeleton_doc: dict) -> str:
+    """The spine-player release for the skeleton's format version."""
+    return versions.get(versions.of(skeleton_doc)).runtime
+
+
+def _cdn(version: str) -> str:
+    return f"https://unpkg.com/@esotericsoftware/spine-player@{version}/dist"
 
 
 def _data_uri(path: Path, mime: str) -> str:
@@ -45,6 +54,7 @@ def preview_html(
     out_path = Path(out_path) if out_path else project_path.with_name(f"{project_path.stem}_preview.html")
     atlas_text = atlas_path.read_text(encoding="utf-8")
     skeleton_doc = json.loads(project_path.read_text(encoding="utf-8"))
+    version = player_version(skeleton_doc)
     animations = list(skeleton_doc.get("animations") or {})
     if animation is not None and animation not in animations:
         raise ValueError(f"no animation {animation!r} (have {', '.join(animations) or 'none'})")
@@ -63,10 +73,13 @@ def preview_html(
         "skeleton": project_path.name,
         "atlas": atlas_path.name,
         "rawDataURIs": raw,
-        "premultipliedAlpha": False,
         "backgroundColor": background,
         "showControls": True,
     }
+    if version.startswith("4.2."):
+        # The atlas is straight alpha. 4.3 reads that from the atlas page and
+        # dropped this option.
+        config["premultipliedAlpha"] = False
     if animation or animations:
         config["animation"] = animation or animations[0]
     name = html.escape(title or project_path.stem)
@@ -76,8 +89,8 @@ def preview_html(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{name}</title>
-<link rel="stylesheet" href="{_CDN}/spine-player.min.css">
-<script src="{_CDN}/iife/spine-player.min.js"></script>
+<link rel="stylesheet" href="{_cdn(version)}/spine-player.min.css">
+<script src="{_cdn(version)}/iife/spine-player.min.js"></script>
 <style>
   body {{ margin: 0; padding: 16px; background: {background}; color: #ddd;
          font: 14px/1.4 -apple-system, system-ui, sans-serif; }}

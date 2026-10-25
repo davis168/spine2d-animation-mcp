@@ -5,6 +5,7 @@ before editing it (names, hierarchy, setup positions, what each animation keys).
 from __future__ import annotations
 
 from . import document as d
+from . import versions
 from .check import summary
 
 
@@ -51,9 +52,22 @@ def inspect(doc: dict) -> dict:
                 atts[slot][name] = info
         skins.append({"name": skin.get("name"), "attachments": atts})
 
+    # In apply order; `target` is the bone an IK or transform constraint
+    # follows, whatever the version calls it (4.3 transform: `source`).
     constraints = {}
-    for kind, c in d.all_constraints(doc):
-        info = {k: c[k] for k in ("name", "order", "bones", "bone", "target") if k in c}
+    for applies, (kind, c) in enumerate(d.apply_order(doc)):
+        info = {"name": c.get("name"), "applies": applies}
+        for k in ("order", "bones", "bone", "animation", "property", "scaleY", "uniform", "local", "relative",
+                  "localSource", "localTarget", "additive", "skin"):
+            if k in c:
+                info[k] = c[k]
+        key = d.target_bone_key(doc, kind)
+        if key:
+            info["target"] = c.get(key)
+        if kind == "path":
+            info["slot"] = c.get(d.path_slot_key(doc))
+        if isinstance(c.get("properties"), dict):
+            info["properties"] = {src: sorted((spec or {}).get("to") or {}) for src, spec in c["properties"].items()}
         constraints.setdefault(kind, []).append(info)
 
     animations = []
@@ -72,10 +86,13 @@ def inspect(doc: dict) -> dict:
             "timelines": timelines,
             "events": len(anim.get("events") or []),
             "draw_order_keys": len(anim.get("drawOrder") or []),
+            **({"draw_order_folders": sorted(anim["drawOrderFolder"])}
+               if isinstance(anim.get("drawOrderFolder"), dict) else {}),
         })
 
     return {
         "summary": summary(doc),
+        "format_version": versions.of(doc),
         "skeleton": doc.get("skeleton") or {},
         "bones": bones,
         "slots": slots,

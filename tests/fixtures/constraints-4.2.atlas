@@ -1,0 +1,7 @@
+constraints-4.2.png
+size: 128,64
+filter: Linear,Linear
+skin
+bounds: 0,0,40,40
+skin_alt
+bounds: 40,0,40,40

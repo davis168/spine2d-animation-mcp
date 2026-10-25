@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ..edits import EditError
 from ..spine import document as d
+from ..spine import versions
 from ..spine.animation import rename_bones, to_wire
 from ..spine.presets import preset as make_preset
 
@@ -60,7 +61,7 @@ def add_animation(
     if timelines:
         anim = _merge(anim, timelines)
 
-    wire = to_wire(anim)
+    wire = to_wire(anim, versions.layout(doc))
     defined = []
     events = doc.setdefault("events", {}) if wire.get("events") else doc.get("events")
     for key in wire.get("events") or []:
