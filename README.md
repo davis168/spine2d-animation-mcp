@@ -18,7 +18,7 @@ The Spine editor has no live scripting API, so the server works on the files (sk
 | `inspect_skeleton` | Bones (setup and world positions), slots in draw order, skins, constraints, events, and what each animation keys |
 | `validate_skeleton` | Format check against the file's version, plus whether it matches the game project's; `runtime=true` also loads and plays it, with every skin, in spine-core (the game's installed release, else that version's tested one) |
 | `add_animation` / `remove_animation` | Presets (idle, walk, wave, jump) or keyframes with an easing shorthand; preset + keyframe overrides |
-| `edit_rig` | Add/set/rename/remove bones (with their editor icon and visibility), move a pivot without moving the art, reparent, add/set/rename/remove slots, draw order folders, draw order (draw order keys keep showing the same order), event defaults and sounds |
+| `edit_rig` | Add/set/rename/remove bones (with their editor icon and visibility), move a pivot without moving the art, reparent, add/set/rename/remove slots, draw order folders, draw order (draw order keys keep showing the same order), event defaults and sounds, skeleton header (referenceScale, fps, images and audio folders) |
 | `add_constraint` / `remove_constraint` | IK, transform, path, physics and (4.3) slider constraints (physics presets: hair, cloth, tail, antenna, jiggle) |
 | `add_attachment` | Add a PNG (or an image sequence) as a region attachment on a slot (mouth shapes, alternate hands, flames) and repack the atlas |
 | `add_mesh` | A mesh: a region turned into a mesh in place, a grid mesh from a PNG, or a linked mesh (another image on a mesh, in 4.3 also from another slot); bound to bones with automatic weights if asked |

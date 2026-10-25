@@ -195,8 +195,10 @@ def test_add_attachment_checks_the_repack_before_writing(imported, tmp_path):
 def test_add_attachment_will_not_overwrite_a_different_image(imported, tmp_path):
     png = tmp_path / "torso.png"
     Image.new("RGBA", (8, 8), (0, 0, 255, 255)).save(png)
-    with pytest.raises(EditError, match="already exists"):
+    with pytest.raises(EditError, match="is the image of default/torso/torso"):
         server.add_attachment(str(imported.project_path), "head", str(png))
+    with pytest.raises(EditError, match="is the image of"):  # not even with replace: torso still shows it
+        server.add_attachment(str(imported.project_path), "head", str(png), replace=True)
 
 
 def test_replacing_a_constraint_keeps_its_skins(imported):

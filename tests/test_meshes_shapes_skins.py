@@ -269,6 +269,44 @@ def test_bone_display_fields(doc, doc43):
     assert "iconRotation" not in d.bone_map(down.doc)["head"]
 
 
+def test_skin_art_keeps_its_own_image(imported43, art):
+    path = str(imported43.project_path)
+    images = imported43.project_path.parent / "images"
+    original = (images / "arm_left.png").read_bytes()
+    server.add_mesh(path, "arm_left", "arm_left")
+    server.edit_skin(path, [{"op": "add_skin", "name": "armor"}])
+    result = server.add_mesh(path, "arm_left", "arm_left", source="arm_left", skin="armor",
+                             image_path=str(art / "armor_arm.png"))
+    assert result["image"].endswith("images/armor/arm_left.png")
+    assert (images / "arm_left.png").read_bytes() == original  # the default art is untouched
+    doc = d.load(path)
+    assert _att(doc, "arm_left", "arm_left", "armor")["path"] == "armor/arm_left"
+    assert "armor/arm_left" in imported43.atlas_path.read_text() and check(doc) == []
+    with pytest.raises(EditError, match="is the image of default/arm_left/arm_left"):
+        server.add_attachment(path, "arm_right", str(art / "armor_arm.png"), name="arm_left", replace=True)
+    assert (images / "arm_left.png").read_bytes() == original
+
+
+def test_header_and_animation_colour(doc, doc43):
+    rig.set_skeleton(doc43, referenceScale=50, fps=24, audio="./audio/")
+    header = doc43["skeleton"]
+    assert (header["referenceScale"], header["fps"], header["audio"]) == (50, 24, "./audio/")
+    rig.set_skeleton(doc43, fps=30)  # the default is left out
+    assert "fps" not in header
+    with pytest.raises(EditError, match="referenceScale must be a number above 0"):
+        rig.set_skeleton(doc43, referenceScale=0)
+    with pytest.raises(EditError, match="no settable 'hash'"):
+        rig.set_skeleton(doc43, hash="x")
+    add_animation(doc43, "a", timelines={"color": "ff8800ff", "bones": {"head": {"rotate": [{"value": 0}]}}})
+    assert check(doc43) == []
+    doc43["animations"]["a"]["color"] = "nope"
+    assert any("animations.a.color" in e for e in _errors(doc43))
+    add_animation(doc, "a", timelines={"color": "ff8800ff", "bones": {"head": {"rotate": [{"value": 0}]}}})
+    assert any("4.3 editor data" in w for w in _warnings(doc))
+    doc43["animations"]["a"]["color"] = "ff8800ff"
+    assert convert(doc43, "4.2").dropped_editor_data == ["animation 'a' color"]
+
+
 def test_event_definitions(doc43):
     done = rig.edit_rig(doc43, [{"op": "set_event", "name": "step", "int": 2, "string": "left",
                                  "audio": "sfx/step.wav", "volume": 0.5}])

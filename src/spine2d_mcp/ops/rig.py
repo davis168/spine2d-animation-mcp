@@ -482,6 +482,25 @@ def set_draw_order(doc: dict, order: list[str] | None = None, slot: str | None =
     return {"op": "set_draw_order", "order": order, **_kept_keys(doc, names)}
 
 
+# The skeleton header's settable fields: referenceScale (physics distances
+# are relative to it), the editor's fps and its images and audio folders.
+_HEADER_DEFAULTS = {"referenceScale": 100, "fps": 30, "images": None, "audio": None}
+
+
+def set_skeleton(doc: dict, **fields) -> dict:
+    """Set skeleton header fields (referenceScale, fps, images, audio)."""
+    unknown = [k for k in fields if k not in _HEADER_DEFAULTS]
+    if unknown:
+        raise EditError(f"the skeleton header has no settable {', '.join(map(repr, unknown))} "
+                        f"(have {', '.join(_HEADER_DEFAULTS)})")
+    for key in ("referenceScale", "fps"):
+        if key in fields and (not isinstance(fields[key], (int, float)) or fields[key] <= 0):
+            raise EditError(f"{key} must be a number above 0")
+    header = doc.setdefault("skeleton", {})
+    _set_fields(header, fields, tuple(_HEADER_DEFAULTS), _HEADER_DEFAULTS)
+    return {"op": "set_skeleton", **{k: header[k] for k in _HEADER_DEFAULTS if k in header}}
+
+
 _EVENT_DEFAULTS = {"int": 0, "float": 0, "string": "", "audio": None, "volume": 1, "balance": 0}
 
 
@@ -517,7 +536,7 @@ def remove_event(doc: dict, name: str) -> dict:
 
 
 _OPS = {
-    "set_event": set_event, "remove_event": remove_event,
+    "set_skeleton": set_skeleton, "set_event": set_event, "remove_event": remove_event,
     "add_bone": add_bone, "set_bone": set_bone, "move_pivot": move_pivot, "rename_bone": rename_bone,
     "remove_bone": remove_bone, "add_slot": add_slot, "set_slot": set_slot, "rename_slot": rename_slot,
     "rename_folder": rename_folder, "remove_slot": remove_slot, "set_draw_order": set_draw_order,

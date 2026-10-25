@@ -297,6 +297,8 @@ def edit_rig(project_path: str, operations: list[dict], out_path: str | None = N
     - set_event: name [, int, float, string, audio (path in the skeleton's
       audio folder), volume, balance]: define an event or its defaults
     - remove_event: name (only if no animation keys it)
+    - set_skeleton: referenceScale (physics distances are relative to it),
+      fps (the editor's), images, audio (folders relative to the JSON)
     Draw order keys keep showing the same order when slots are added,
     removed, renamed or reordered. Renamed slots need renaming in game code
     that looks them up by name.
@@ -447,7 +449,8 @@ def add_attachment(
         slot: Slot to attach to (add one first with edit_rig add_slot if needed).
         image_path: Absolute path to the PNG (or give frames).
         name: Attachment name; default the PNG's file name without extension.
-        skin: Skin to add it to (created if missing).
+        skin: Skin to add it to (created if missing); another skin's images
+            go in images/<skin>/, so the same name can show other art per skin.
         x, y, rotation: Image centre and angle relative to the slot's bone, or
             world-space with world=true.
         set_as_setup: Show it in the setup pose (sets the slot's attachment).
@@ -463,7 +466,7 @@ def add_attachment(
     name = name or (Path(image_path).stem if image_path else None)
     if not name:
         raise EditError("give name (or image_path, whose file name it defaults to)")
-    images, size, path, sequence = _images(name, image_path, frames, setup_frame)
+    images, size, path, sequence = _images(name, image_path, frames, skin, setup_frame)
     if size is None:
         raise EditError("give image_path or frames")
 
@@ -472,30 +475,34 @@ def add_attachment(
                                   set_as_setup=set_as_setup, replace=replace, sequence=sequence, path=path)
 
     return _with_images(project_path, images, replace, atlas_path, edit, allow_version_mismatch,
-                        save_project_version)
+                        save_project_version, (skin, slot, name))
 
 
-def _images(name: str, image_path: str | None, frames: list[str] | None, setup_frame: int = 0):
+def _images(name: str, image_path: str | None, frames: list[str] | None, skin: str, setup_frame: int = 0):
     """Images to copy in (region name -> PNG), the attachment's size, its
-    region path when that differs from its name, and its sequence."""
+    region path when that differs from its name, and its sequence. A skin
+    other than the default keeps its images in a folder of its name, so an
+    attachment named like a default one (the usual way to swap art per
+    skin) does not take the default one's image."""
     if image_path and frames:
         raise EditError("give image_path or frames, not both")
+    base = name if skin == "default" else f"{skin}/{name}"
     if frames:
         sequence = att_ops.make_sequence(len(frames), setup=setup_frame)
-        path = f"{name}_"
+        path = f"{base}_"
         return (dict(zip(att_ops.sequence_names(path, sequence), frames)), att_ops.image_size(frames[0]), path,
                 sequence)
     if image_path:
-        return {name: image_path}, att_ops.image_size(image_path), None, None
+        return {base: image_path}, att_ops.image_size(image_path), (base if base != name else None), None
     return {}, None, None, None
 
 
 def _with_images(project_path: str, images: dict[str, str], replace: bool, atlas_path: str | None, edit,
-                 allow_version_mismatch: bool, save_project_version: bool) -> dict:
+                 allow_version_mismatch: bool, save_project_version: bool, owner: tuple[str, str, str]) -> dict:
     """Edit the skeleton, then copy the images in and repack the atlas;
     everything that could stop the copy or the repack is checked first."""
     if images:
-        att_ops.check_new_images(d.load(project_path), project_path, images, replace)
+        att_ops.check_new_images(d.load(project_path), project_path, images, replace, owner)
     result = edit_skeleton(project_path, edit, allow_version_mismatch=allow_version_mismatch,
                            save_project_version=save_project_version)
     if images:
@@ -568,7 +575,8 @@ def add_mesh(
         source_skin: Skin holding the source mesh (default "default").
         source_slot: (4.3) Slot holding the source mesh (default this slot).
         timelines: A linked mesh plays its source's deform keys.
-        skin: Skin to add it to (created if missing).
+        skin: Skin to add it to (created if missing); another skin's images
+            go in images/<skin>/, so the same name can show other art per skin.
         set_as_setup: Show it in the setup pose.
         replace: Overwrite an attachment of the same name.
         atlas_path: Atlas to rewrite; default <skeleton>.atlas next to the JSON.
@@ -580,7 +588,7 @@ def add_mesh(
     name = name or (Path(image_path).stem if image_path else None)
     if not name:
         raise EditError("give name: the region to turn into a mesh, or the new mesh's name")
-    images, size, path, sequence = _images(name, image_path, frames)
+    images, size, path, sequence = _images(name, image_path, frames, skin)
 
     def edit(doc):
         if source is not None:
@@ -595,7 +603,7 @@ def add_mesh(
                                  tuple(grid) if grid else None, bones, weights, set_as_setup, replace, sequence)
 
     return _with_images(project_path, images, replace, atlas_path, edit, allow_version_mismatch,
-                        save_project_version)
+                        save_project_version, (skin, slot, name))
 
 
 @mcp.tool()
@@ -728,6 +736,14 @@ def edit_skin(
     active only with a skin (e.g. a cape's bones and physics only in the
     "caped" skin). Attachments go into a skin with the attachment tools'
     `skin` argument.
+
+    A skin needs only the attachments that differ: a slot whose attachment
+    the current skin lacks shows the default skin's. So to swap art, start
+    an empty skin and add the new art under the default attachment's name,
+    e.g. add_mesh(skin="armor", name="arm_left", source="arm_left",
+    image_path=...) for armor on the same mesh; a skin's images are kept in
+    images/<skin>/. copy_from copies a whole skin, for variants that change
+    most of it (keys of copied attachments must then be added per skin).
 
     Operations ("op" plus its fields), applied in order:
     - add_skin: name [, copy_from (a skin to copy), color]

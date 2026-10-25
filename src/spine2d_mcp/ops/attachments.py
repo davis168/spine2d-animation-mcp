@@ -254,22 +254,43 @@ def image_files(folder: Path) -> dict[str, Path]:
     return {p.relative_to(folder).with_suffix("").as_posix(): p for p in sorted(folder.rglob("*.png"))}
 
 
-def check_new_images(doc: dict, project_path: str | Path, images: dict[str, str | Path], replace: bool) -> None:
+def image_users(doc: dict, region: str) -> list[tuple[str, str, str]]:
+    """(skin, slot, attachment) of every attachment showing atlas region `region`."""
+    users = []
+    for skin in d.skins(doc):
+        for slot, atts in (skin.get("attachments") or {}).items():
+            for name, att in (atts or {}).items():
+                if not isinstance(att, dict) or att.get("type", "region") not in ("region", "mesh", "linkedmesh"):
+                    continue
+                path = att.get("path", att.get("name", name))
+                names = sequence_names(path, att["sequence"]) if isinstance(att.get("sequence"), dict) else [path]
+                if region in names:
+                    users.append((skin.get("name"), slot, name))
+    return users
+
+
+def check_new_images(doc: dict, project_path: str | Path, images: dict[str, str | Path], replace: bool,
+                     owner: tuple[str, str, str] | None = None) -> None:
     """Before any write: the images (region name -> PNG) can be copied in and
-    the atlas repacked."""
+    the atlas repacked. An image another attachment shows is never
+    overwritten; `replace` overwrites only the image of `owner` (skin,
+    slot, attachment) itself."""
     folder = images_dir(project_path, doc)
     for name, image_path in images.items():
         image_size(image_path)
         target = folder / f"{name}.png"
-        if target.exists() and target.resolve() != Path(image_path).resolve() and not replace:
+        if not target.exists() or target.resolve() == Path(image_path).resolve():
+            continue
+        others = [u for u in image_users(doc, name) if u != owner]
+        if others:
+            shown = ", ".join("/".join(u) for u in others)
+            raise EditError(f"{target} is the image of {shown}: give this attachment another name (or skin), "
+                            "so both keep their own image")
+        if not replace:
             raise EditError(f"{target} already exists and is a different image (pass replace=true to overwrite it)")
     missing = sorted(attachment_paths(doc) - set(image_files(folder)) - set(images))
     if missing:
         raise EditError(f"cannot repack the atlas afterwards: no image in {folder} for {', '.join(missing)}")
-
-
-def check_new_image(doc: dict, project_path: str | Path, image_path: str | Path, name: str, replace: bool) -> None:
-    check_new_images(doc, project_path, {name: image_path}, replace)
 
 
 def copy_image(image_path: str | Path, folder: Path, name: str) -> Path:

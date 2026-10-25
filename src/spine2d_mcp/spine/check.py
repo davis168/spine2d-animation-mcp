@@ -126,6 +126,13 @@ class _Checker:
                        f"unsupported format version {raw} (supported: {versions.supported_text()}); "
                        "it is not checked further")
             return False
+        header = self.doc.get("skeleton") or {}
+        for key in ("referenceScale", "fps", "x", "y", "width", "height"):
+            if key in header and not _num(header[key]):
+                self.error(f"skeleton.{key}", "not a number")
+        for key in ("referenceScale", "fps"):
+            if _num(header.get(key, 1)) and header.get(key, 1) <= 0:
+                self.error(f"skeleton.{key}", "must be above 0")
         if self.version == "4.2" and "constraints" in self.doc:
             self.error("constraints", "a 4.3 constraints array: 4.2 reads separate ik/transform/path/physics "
                                       "arrays and ignores this (convert_skeleton converts between versions)")
@@ -632,6 +639,11 @@ class _Checker:
     def animation(self, path: str, name: str, anim: dict) -> None:
         duration = d.animation_duration(anim)
         loop = name in self.loops
+        if "color" in anim:
+            if self.version == "4.2":
+                self.warn(f"{path}.color", "4.3 editor data: the 4.2 editor ignores it")
+            else:
+                self.color(f"{path}.color", anim["color"], (6, 8))
         for bone, timelines, bpath in self._groups(path, anim, "bones"):
             if bone not in self.bone_names:
                 self.error(bpath, "bone not found")
