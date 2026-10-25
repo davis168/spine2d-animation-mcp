@@ -53,3 +53,17 @@ _Avoid_: Project (unqualified)
 **Spine project**:
 A Spine editor's own working file (.spine), as opposed to the exported skeleton JSON a game loads.
 _Avoid_: Project (unqualified)
+
+## Drawing
+
+**Draw order**:
+The back-to-front order in which a skeleton's slots are drawn; the setup draw order is the order of the slots themselves, and animations can key changes to it.
+_Avoid_: Z-order, layer order
+
+**Draw order folder**:
+A named group of slots that sit next to each other in the draw order, which can itself hold draw order folders; in 4.3 an animation can key the order of one draw order folder's slots on their own.
+_Avoid_: Slot folder, slot group, layer folder, folder (unqualified: skins and animations have folders too)
+
+**Clipping attachment**:
+A polygon on a slot that clips the slots drawn after it, up to an end slot; it can be inverse (hiding what is inside instead) in 4.3.
+_Avoid_: Mask (in code), clip path

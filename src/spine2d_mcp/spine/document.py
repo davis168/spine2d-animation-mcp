@@ -198,10 +198,76 @@ def animation_duration(animation: dict) -> float:
                 for keys in values(att):
                     keys_time(keys)
     keys_time(animation.get("drawOrder"))
-    for folder in values(animation.get("drawOrderFolder")):  # 4.3: name -> {slots, keys}
+    folders = animation.get("drawOrderFolder")  # 4.3: [{slots, keys}]
+    for folder in folders if isinstance(folders, list) else []:
         keys_time(folder.get("keys") if isinstance(folder, dict) else None)
     keys_time(animation.get("events"))
     return latest
+
+
+# The editor keeps draw order folders in slot names: a slot named "face/eyes/left"
+# is in folder "face" and its subfolder "face/eyes". A folder's slots sit next
+# to each other in the draw order; a 4.3 draw order folder timeline keys all
+# of them (subfolders included).
+
+def draw_order_folders(names: list[str]) -> dict[str, list[str]]:
+    """Every draw order folder, outer folders first, with its slots in the order given."""
+    folders: dict[str, list[str]] = {}
+    for name in names:
+        parts = name.split("/")
+        for depth in range(1, len(parts)):
+            folders.setdefault("/".join(parts[:depth]), []).append(name)
+    return folders
+
+
+def folder_of(names: list[str], slots) -> str | None:
+    """The folder holding exactly `slots` (the outermost, if nested folders hold the same ones)."""
+    if not isinstance(slots, list) or not all(isinstance(s, str) for s in slots):
+        return None
+    wanted = set(slots)
+    return next((f for f, held in draw_order_folders(names).items() if set(held) == wanted), None)
+
+
+def offsets_for(base: list[str], order: list[str]) -> list[dict]:
+    """The draw order key offsets that turn `base` (setup order) into `order`
+    (the same names, reordered)."""
+    position = {name: i for i, name in enumerate(order)}
+    return [{"slot": name, "offset": position[name] - i} for i, name in enumerate(base) if position[name] != i]
+
+
+def order_from(base: list[str], offsets: list[dict]) -> list[str]:
+    """The order a draw order key's offsets give, as the reader computes it."""
+    index = {name: i for i, name in enumerate(base)}
+    order: list[str | None] = [None] * len(base)
+    unchanged, original = [], 0
+    for o in offsets:
+        while original != index[o["slot"]]:
+            unchanged.append(base[original])
+            original += 1
+        order[original + o.get("offset", 0)] = base[original]
+        original += 1
+    unchanged += base[original:]
+    for i in range(len(order) - 1, -1, -1):
+        if order[i] is None:
+            order[i] = unchanged.pop()
+    return order
+
+
+def split_folders(names: list[str]) -> list[str]:
+    """Folders whose slots are not next to each other in `names`."""
+    index = {name: i for i, name in enumerate(names)}
+    return [f for f, held in draw_order_folders(names).items() if index[held[-1]] - index[held[0]] + 1 != len(held)]
+
+
+def is_convex(points: list[tuple[float, float]]) -> bool:
+    """Whether a polygon turns the same way at every corner."""
+    turns = set()
+    for i in range(len(points)):
+        (ax, ay), (bx, by), (cx, cy) = points[i - 2], points[i - 1], points[i]
+        cross = (bx - ax) * (cy - by) - (by - ay) * (cx - bx)
+        if abs(cross) > 1e-9:
+            turns.add(cross > 0)
+    return len(turns) <= 1
 
 
 @dataclass(frozen=True)

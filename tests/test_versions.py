@@ -208,20 +208,20 @@ def test_43_linked_meshes_folders_and_slider_timelines():
                    "lost": {"type": "linkedmesh", "source": "m"}}}}],
         animations={"blink": {}, "a": {
             "slider": {"sl": {"time": [{"value": 0}, {"time": 1}]}, "nope": {"time": [{}]}},
-            "drawOrderFolder": {"face": {"slots": ["s1", "s2"], "keys": [{"offsets": [{"slot": "s1", "offset": 1}]}]},
-                                "bad": {"slots": ["s1"], "keys": [{"offsets": [{"slot": "s2", "offset": 0}]}]}}}})
+            "drawOrderFolder": [{"slots": ["s1", "s2"], "keys": [{"offsets": [{"slot": "s1", "offset": 1}]}]},
+                                {"slots": ["s1"], "keys": [{"offsets": [{"slot": "s2", "offset": 0}]}]}]}})
     errors = _errors(doc)
     assert any("old: 'parent' is the 4.2 key" in e for e in errors)
     assert any("lost: source mesh 'm' not found" in e for e in errors)
     assert not any("cross" in e for e in errors)
     assert any("slider.nope: slider not found" in e for e in errors)
-    assert any("bad.keys[0]: slot 's2' is not in the folder" in e for e in errors)
-    assert not any("face" in e for e in errors)
+    assert any("drawOrderFolder[1].keys[0]: slot 's2' is not in the folder" in e for e in errors)
+    assert not any("drawOrderFolder[0]" in e for e in errors)
 
 
 def test_42_rejects_43_features(imported):
     doc = d.load(imported.project_path)
-    doc["animations"] = {"a": {"drawOrderFolder": {}, "slider": {"x": {}}}}
+    doc["animations"] = {"a": {"drawOrderFolder": [], "slider": {"x": {}}}}
     doc["skins"][0]["attachments"]["head"]["clip"] = {"type": "clipping", "vertexCount": 3,
                                                        "vertices": [0, 0, 1, 0, 0, 1], "inverse": True}
     doc["ik"] = [{"name": "ik", "bones": ["arm_left"], "target": "hand_left", "scaleY": "volume"}]

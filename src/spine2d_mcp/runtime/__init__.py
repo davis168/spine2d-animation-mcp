@@ -120,6 +120,10 @@ def compare_poses(original: str | Path, converted: str | Path, atlas_path: str |
                 diff = max(abs(x - y) for x, y in zip(ta, tb))
                 if diff > worst["difference"]:
                     worst = {"difference": round(diff, 4), "animation": name, "frame": i, "bone": a["bone_names"][j]}
+        for i, (oa, ob) in enumerate(zip(a["draw_orders"][name], b["draw_orders"][name])):
+            if oa != ob:
+                return {**result, "ok": False,
+                        "reason": f"draw order differs in {name!r} at frame {i}: {', '.join(oa)} vs {', '.join(ob)}"}
         for i, (pa, pb) in enumerate(zip(a["physics_frames"][name], b["physics_frames"][name])):
             for j, (va, vb) in enumerate(zip(pa, pb)):
                 diff = max(abs(x - y) for x, y in zip(va, vb))

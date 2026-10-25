@@ -18,9 +18,11 @@ The Spine editor has no live scripting API, so the server works on the files (sk
 | `inspect_skeleton` | Bones (setup and world positions), slots in draw order, skins, constraints, events, and what each animation keys |
 | `validate_skeleton` | Format check against the file's version, plus whether it matches the game project's; `runtime=true` also loads and plays it in that version's spine-core |
 | `add_animation` / `remove_animation` | Presets (idle, walk, wave, jump) or keyframes with an easing shorthand; preset + keyframe overrides |
-| `edit_rig` | Add/set/rename/remove bones, move a pivot without moving the art, reparent, add/set/remove slots, draw order |
+| `edit_rig` | Add/set/rename/remove bones, move a pivot without moving the art, reparent, add/set/rename/remove slots, draw order folders, draw order (draw order keys keep showing the same order) |
 | `add_constraint` / `remove_constraint` | IK, transform, physics and (4.3) slider constraints (physics presets: hair, cloth, tail, antenna, jiggle) |
 | `add_attachment` | Add a PNG as a region attachment on a slot (mouth shapes, alternate hands) and repack the atlas |
+| `add_clipping` | A clipping polygon (mask) on a slot, clipping the slots drawn after it up to `end`; (4.3) convex and inverse |
+| `set_draw_order_keys` | An animation's draw order keys by back-to-front slot order: the whole skeleton's, or (4.3) one draw order folder's |
 | `pack_atlas` | Repack the atlas from the images folder |
 | `convert_skeleton` | Convert a skeleton between 4.2 and 4.3 into a new file; refuses a lossy conversion unless agreed; verifies poses in both runtimes |
 | `spine_import` | Import the JSON into a `.spine` project with the Spine CLI, using an editor of the file's version |
@@ -58,11 +60,16 @@ Rig conventions:
 
 Presets are tuned for importer rigs and scale with the skeleton's height: `idle` (2.0 s loop), `walk` (0.8 s in-place front-view loop; only the lifted leg moves, so the planted foot never slides), `wave` (2.5 s, either arm), `jump` (1.3 s, squash and stretch about the feet). `speed`, `amount` and `bone_map` (preset bone → your bone) adapt them.
 
+### Draw order and draw order folders
+
+A draw order key may give `"order"` (every slot, back to front) instead of the offsets Spine stores. As in the editor, a **draw order folder** is the slots whose names share a prefix (`face/eye`, `face/mouth`; nested: `face/brows/left`), kept next to each other in the draw order: `edit_rig` `rename_slot` (`head` → `face/head`) and `rename_folder` manage them. In 4.3 a draw order folder can have its own draw order keys (`set_draw_order_keys` with `folder`, or `drawOrderFolder` in `add_animation`), which reorder only its slots, over the whole draw order's keys. Converting to 4.2 folds them into whole draw order keys that show the same orders.
+
 ### Limits
 
 - **IK** aims a bone's x axis at the target, so it suits rigs whose bones point along their limbs. Importer rigs have unrotated bones; `add_constraint` warns when the setup pose would swing. Aim importer limbs with rotate keys.
 - **Path constraints** are preserved and checked but cannot be added (they need path attachments).
-- **4.3 extras the tools keep and check but do not create**: clipping `convex`/`inverse`, draw order folders, and linked meshes whose source mesh is in another slot.
+- **4.3 extras the tools keep and check but do not create**: linked meshes whose source mesh is in another slot.
+- **What the Spine 4.3 editor (4.3.26) changes when it imports JSON**: every clip comes in convex and none inverse (it does not read either flag), and a nested draw order folder's draw order keys are dropped; the runtime reads all of them. `add_clipping`, `set_draw_order_keys` and `spine_import` say when this applies.
 - `move_pivot`, reparenting and slot rebinding work in world space and require `inherit: normal` along the chain.
 
 ## Spine versions

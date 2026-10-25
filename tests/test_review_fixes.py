@@ -207,8 +207,8 @@ def test_replacing_a_constraint_keeps_its_skins(imported):
     assert doc["skins"][0]["physics"] == ["sway"] and _errors(doc) == []
 
 
-def test_remove_slot_names_what_still_uses_it(imported):
+def test_remove_slot_takes_it_out_of_draw_order_keys(imported):
     doc = d.load(imported.project_path)
     doc["animations"] = {"a": {"drawOrder": [{"time": 0, "offsets": [{"slot": "head", "offset": 1}]}]}}
-    with pytest.raises(EditError, match="drawOrder keys of a"):
-        rig.remove_slot(doc, "head")
+    rig.remove_slot(doc, "head")  # head behind torso -> the others keep their order
+    assert doc["animations"]["a"]["drawOrder"] == [{"time": 0}]

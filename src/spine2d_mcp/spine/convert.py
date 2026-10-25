@@ -8,9 +8,10 @@ mixes are all zero is kept rather than deleted.
 
 4.3 -> 4.2 reverses that. What 4.2 cannot express (sliders, non-identity
 transform property mappings, scale modes other than uniform IK, clipping
-convex/inverse, cross-slot linked meshes, draw order folders) is a loss: the
-conversion refuses, listing each one, unless `allow_lossy` is passed, in which
-case exactly those parts are dropped. Editor-only display data (bone icon size
+convex/inverse, cross-slot linked meshes) is a loss: the conversion refuses,
+listing each one, unless `allow_lossy` is passed, in which case exactly those
+parts are dropped. Draw order folder keys are folded into whole draw order
+keys, which show the same orders. Editor-only display data (bone icon size
 and rotation) is dropped without counting as a loss.
 
 Defaults that changed between the versions are written out explicitly, so
@@ -70,6 +71,26 @@ def convert(doc: dict, to_version: str, allow_lossy: bool = False) -> Conversion
         header["spine"] = path[i]
     header.pop("hash", None)  # the editor's hash of the old content
     return out
+
+
+def _fold_folder_keys(anim: dict, names: list[str]) -> None:
+    """Replace an animation's draw order and folder keys with whole draw
+    order keys showing what the 4.3 runtime shows: at each key time the
+    whole order, then each folder refilling the positions its slots hold.
+    Draw order keys are stepped, so this is exact at every time."""
+    timelines = [(names, anim.get("drawOrder") or [])]
+    timelines += [(e["slots"], e.get("keys") or []) for e in anim["drawOrderFolder"] if isinstance(e, dict)]
+    out = []
+    for time in sorted({k.get("time", 0) for _, keys in timelines for k in keys}):
+        order = list(names)
+        for base, keys in timelines:
+            current = [k for k in keys if k.get("time", 0) <= time]
+            keyed = iter(d.order_from(base, current[-1].get("offsets") or []) if current else base)
+            held = set(base)
+            order = [next(keyed) if s in held else s for s in order]
+        offsets = d.offsets_for(names, order)
+        out.append({"time": time, **({"offsets": offsets} if offsets else {})})
+    anim["drawOrder"] = out
 
 
 def _key_default(prop: str, values: dict, version: str) -> float:
@@ -228,10 +249,15 @@ def _convert_43_to_42(out: Conversion, allow_lossy: bool) -> None:
                 if att.pop(key, False):
                     losses.append(f"clipping {where} {key} (4.2 has no {key} clipping)")
 
+    names = [s["name"] for s in d.slots(doc)]
     for anim_name, anim in (doc.get("animations") or {}).items():
         anim = anim or {}
-        if anim.pop("drawOrderFolder", None):
-            losses.append(f"animation {anim_name!r} draw order folders (4.2 has none)")
+        if anim.get("drawOrderFolder"):
+            _fold_folder_keys(anim, names)
+            out.changed.append(f"animation {anim_name!r}: draw order folder keys folded into whole draw order keys "
+                               "(the same order while it plays alone; on a higher track they now set every "
+                               "slot's order)")
+        anim.pop("drawOrderFolder", None)
         if anim.pop("slider", None) and not sliders:
             losses.append(f"animation {anim_name!r} slider timelines")
         for name, keys in (anim.get("transform") or {}).items():

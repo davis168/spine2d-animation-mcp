@@ -88,6 +88,7 @@ class _Checker:
         self.findings: list[Finding] = []
         self.bone_names: set[str] = set()
         self.slot_names: list[str] = []
+        self.folders: dict[str, list[str]] = {}
         self.skin_names: set[str] = set()
         self.event_names: set[str] = set()
         self.constraint_names: dict[str, set[str]] = {k: set() for k in d.CONSTRAINT_KINDS}
@@ -194,6 +195,11 @@ class _Checker:
             # Static colours go through Color.valueOf: 6 digits, or 8 with alpha.
             self.color(f"{path}.color", slot.get("color"), (6, 8))
             self.color(f"{path}.dark", slot.get("dark"), (6, 8))
+        self.folders = d.draw_order_folders(self.slot_names)
+        for folder in d.split_folders(self.slot_names):
+            self.warn("slots", f"draw order folder {folder!r} ({', '.join(self.folders[folder])}) is not together in "
+                               "the draw order: the Spine editor pulls its slots together on import, which "
+                               "changes the draw order")
 
     # ── constraints ──────────────────────────────────────────────────────────
 
@@ -428,6 +434,13 @@ class _Checker:
                     if att.get(key):
                         self.error(f"{path}.{key}", "a 4.3 key: 4.2 ignores it, so the clip shape differs")
             self.vertices(path, att, att.get("vertexCount"))
+            count, vertices = att.get("vertexCount"), att.get("vertices")
+            if isinstance(count, int) and count < 3:
+                self.warn(path, "a clipping polygon with fewer than 3 points has no area: what it covers vanishes")
+            elif (self.version == "4.3" and att.get("convex") and isinstance(vertices, list)
+                  and len(vertices) == 2 * count and all(_num(v) for v in vertices)
+                  and not d.is_convex(list(zip(vertices[::2], vertices[1::2])))):
+                self.warn(f"{path}.convex", "the polygon is not convex, so a convex clip cuts it wrongly")
         elif kind in ("boundingbox", "path"):
             self.vertices(path, att, att.get("vertexCount"))
             if kind == "path":
@@ -651,7 +664,7 @@ class _Checker:
                         self.warn(f"{cpath}.{tname}", "unknown slider timeline: the reader skips it")
         self.deforms(path, anim)
         self.draw_order(f"{path}.drawOrder", anim.get("drawOrder"), self.slot_names)
-        self.draw_order_folders(path, anim.get("drawOrderFolder"))
+        self.folder_keys(path, anim.get("drawOrderFolder"))
         events = anim.get("events")
         if events is not None and self.keys(f"{path}.events", events):
             for i, k in enumerate(events):
@@ -719,15 +732,19 @@ class _Checker:
                 else:
                     taken.add(target)
 
-    def draw_order_folders(self, path: str, folders) -> None:
+    def folder_keys(self, path: str, folders) -> None:
         if folders is None:
             return
         fpath = f"{path}.drawOrderFolder"
         if self.version == "4.2":
             self.error(fpath, "4.3 draw order folders: 4.2 ignores them")
             return
-        for name, folder in (self._obj(fpath, folders) or {}).items():
-            npath = f"{fpath}.{name}"
+        if not isinstance(folders, list):
+            self.error(fpath, "must be a list of {slots, keys} (the runtime iterates it)")
+            return
+        keyed: set[str] = set()
+        for i, folder in enumerate(folders):
+            npath = f"{fpath}[{i}]"
             if not isinstance(folder, dict) or not isinstance(folder.get("slots"), list):
                 self.error(npath, "needs 'slots' (the folder's slots) and 'keys'")
                 continue
@@ -736,10 +753,27 @@ class _Checker:
             if missing:
                 self.error(f"{npath}.slots", f"slots not found: {', '.join(map(str, missing))}")
                 continue
+            in_setup_order = [s for s in self.slot_names if s in slots]
+            if len(set(slots)) != len(slots):
+                self.error(f"{npath}.slots", "a slot is listed twice")
+            elif slots != in_setup_order:
+                self.error(f"{npath}.slots", f"must list the slots in setup draw order ({', '.join(in_setup_order)}): "
+                                             "the runtime counts the keys' offsets that way")
+            name = d.folder_of(self.slot_names, slots)
+            if name is None:
+                self.warn(f"{npath}.slots", "not the slots of one draw order folder (the slots named 'folder/...'): "
+                                            "the Spine editor drops these keys on import")
+            elif name in keyed:
+                self.warn(npath, f"folder {name!r} is keyed twice; the later timeline wins")
+            elif "/" in name:
+                self.warn(npath, f"keys nested folder {name!r}: the Spine 4.3 editor (4.3.26) drops them on "
+                                 "import; the runtime plays them")
+            if name:
+                keyed.add(name)
             if "keys" not in folder:
                 self.error(npath, "needs 'keys' (the reader requires them)")
                 continue
-            self.draw_order(f"{npath}.keys", folder["keys"], [s for s in self.slot_names if s in slots])
+            self.draw_order(f"{npath}.keys", folder["keys"], in_setup_order)
 
     # ── keys and curves ──────────────────────────────────────────────────────
 

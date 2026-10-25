@@ -71,9 +71,11 @@ try {
     const p = v43 ? c.appliedPose : c;
     return [p.inertia, p.strength, p.damping, p.massInverse, p.wind, p.gravity, p.mix].map(round);
   };
+  const drawOrder = () => (v43 ? skeleton.drawOrder.appliedPose : skeleton.drawOrder).map((s) => s.data.name);
   if (poses) {
     report.poses = {};
     report.physics_frames = {};
+    report.draw_orders = {};
     report.physics = physics.map((c) => {
       const d = c.data;
       return { name: d.name, settings: [d.x, d.y, d.rotate, d.scaleX, d.shearX, d.limit, d.step, d.inertiaGlobal,
@@ -87,7 +89,7 @@ try {
     setupPose(skeleton);
     skeleton.updateWorldTransform(spine.Physics.reset);
     const events = [];
-    const frames = [], physicsFrames = [];
+    const frames = [], physicsFrames = [], drawOrders = [];
     let finite = true, travel = 0, last = 0;
     const count = Math.max(1, Math.ceil(animation.duration / dt));
     for (let i = 0; i <= count; i++) {
@@ -107,11 +109,13 @@ try {
       if (poses) {
         frames.push(frame);
         physicsFrames.push(physics.map(physicsValues));
+        drawOrders.push(drawOrder());
       }
     }
     if (poses) {
       report.poses[animation.name] = frames;
       report.physics_frames[animation.name] = physicsFrames;
+      report.draw_orders[animation.name] = drawOrders;
     }
     report.animations.push({
       name: animation.name,

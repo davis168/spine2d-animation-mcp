@@ -43,9 +43,11 @@ def inspect(doc: dict) -> dict:
             atts[slot] = {}
             for name, att in (named or {}).items():
                 info = {"type": att.get("type", "region")}
-                for key in ("path", "width", "height", "x", "y", "rotation", "parent", "end"):
+                for key in ("path", "width", "height", "x", "y", "rotation", "parent", "source", "slot", "end",
+                            "convex", "inverse"):
                     if key in att:
-                        info[key] = _r(att[key]) if isinstance(att[key], (int, float)) else att[key]
+                        number = isinstance(att[key], (int, float)) and not isinstance(att[key], bool)
+                        info[key] = _r(att[key]) if number else att[key]
                 if "uvs" in att:
                     info["vertices"] = len(att["uvs"]) // 2
                     info["weighted"] = len(att.get("vertices") or []) != len(att["uvs"])
@@ -70,6 +72,7 @@ def inspect(doc: dict) -> dict:
             info["properties"] = {src: sorted((spec or {}).get("to") or {}) for src, spec in c["properties"].items()}
         constraints.setdefault(kind, []).append(info)
 
+    names = [s["name"] for s in d.slots(doc)]
     animations = []
     for name, anim in (doc.get("animations") or {}).items():
         anim = anim or {}
@@ -86,16 +89,19 @@ def inspect(doc: dict) -> dict:
             "timelines": timelines,
             "events": len(anim.get("events") or []),
             "draw_order_keys": len(anim.get("drawOrder") or []),
-            **({"draw_order_folders": sorted(anim["drawOrderFolder"])}
-               if isinstance(anim.get("drawOrderFolder"), dict) else {}),
+            **({"folder_keys": [d.folder_of(names, (e or {}).get("slots")) or (e or {}).get("slots")
+                                       for e in anim["drawOrderFolder"]]}
+               if isinstance(anim.get("drawOrderFolder"), list) else {}),
         })
 
+    folders = d.draw_order_folders(names)
     return {
         "summary": summary(doc),
         "format_version": versions.of(doc),
         "skeleton": doc.get("skeleton") or {},
         "bones": bones,
         "slots": slots,
+        **({"draw_order_folders": folders} if folders else {}),
         "skins": skins,
         "constraints": constraints,
         "events": sorted(doc.get("events") or {}),

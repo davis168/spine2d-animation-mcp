@@ -24,6 +24,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from .spine import document as d
 from .spine import versions
 
 _CANDIDATES = (
@@ -186,7 +187,39 @@ def spine_import(
     if skeleton_name:
         args.append(skeleton_name)
     run = run_spine(args, editor_for(version, editor_version))
-    return _result(run, spine_project=str(target), format_version=version)
+    result = _result(run, spine_project=str(target), format_version=version)
+    changed = import_changes(json.loads(project_path.read_text(encoding="utf-8")))
+    return {**result, "changed_on_import": changed} if changed else result
+
+
+def import_changes(doc: dict) -> list[str]:
+    """What the Spine 4.3 editor's JSON import (seen with 4.3.26) changes or
+    drops in a 4.3 skeleton: clipping flags, which it does not read, and draw
+    order folder keys that do not key one top-level draw order folder."""
+    if versions.layout(doc) == "4.2":
+        return []
+    out = []
+    for skin in d.skins(doc):
+        for slot, atts in (skin.get("attachments") or {}).items():
+            for name, att in (atts or {}).items():
+                if not isinstance(att, dict) or att.get("type") != "clipping":
+                    continue
+                vertices = att.get("vertices") or []
+                flat = len(vertices) == 2 * att.get("vertexCount", 0)  # weighted clips: not checked
+                points = list(zip(vertices[::2], vertices[1::2])) if flat else []
+                if att.get("inverse"):
+                    out.append(f"clip {skin.get('name')}/{slot}/{name}: inverse is dropped")
+                elif points and not d.is_convex(points):
+                    out.append(f"clip {skin.get('name')}/{slot}/{name}: turned convex (clips to its hull)")
+    names = [s["name"] for s in d.slots(doc)]
+    for anim_name, anim in (doc.get("animations") or {}).items():
+        entries = (anim or {}).get("drawOrderFolder")
+        for entry in entries if isinstance(entries, list) else []:
+            folder = d.folder_of(names, (entry or {}).get("slots"))
+            if folder is None or "/" in folder:
+                what = f"nested folder {folder!r}" if folder else f"slots {(entry or {}).get('slots')}"
+                out.append(f"animation {anim_name!r}: the draw order keys of {what} are dropped")
+    return out
 
 
 def _png_settings(input_path: Path, output: Path, skeleton: str, fps: int, scale: float, background: str | None) -> dict:

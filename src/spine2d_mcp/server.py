@@ -197,7 +197,12 @@ def add_animation(
      "slots": {"mouth": {"attachment": [{"time": 0, "name": "mouth_open"}],
                          "rgba": [{"time": 0, "color": "ffffffff", "ease": "linear"}, ...]}},
      "slider": {"blink": {"time": [{"time": 0, "value": 0}, ...]}},   (4.3)
+     "drawOrder": [{"time": 0.2, "order": [every slot, back to front]}],
+     "drawOrderFolder": {"face": [{"time": 0.2,                         (4.3)
+                                   "order": ["face/mouth", "face/eye"]}]},
      "events": [{"time": 0.3, "name": "footstep"}]}
+    drawOrderFolder keys a draw order folder (the slots named "face/..."; see
+    edit_rig rename_slot): its order lists all the folder's slots.
     A key's "ease" shapes the segment from that key to the next: linear,
     stepped, in, out, inout, smooth, back, or [x1, y1, x2, y2] (CSS
     cubic-bezier). Rotations use "value" (degrees, CCW); times are seconds.
@@ -273,8 +278,16 @@ def edit_rig(project_path: str, operations: list[dict], out_path: str | None = N
     - add_slot: name, bone [, attachment, index, color, dark, blend]
     - set_slot: name [, bone (keeps attachments in place), attachment, color,
       dark, blend]
+    - rename_slot: name, to (updates skins, constraints, clips, animations);
+      a "/" puts the slot in a draw order folder (head -> face/head), whose slots
+      stay next to each other in the draw order
+    - rename_folder: name, to (renames the folder's slots; to="" takes them
+      out of it)
     - remove_slot: name
     - set_draw_order: order=[every slot, back to front] or slot + index
+    Draw order keys keep showing the same order when slots are added,
+    removed, renamed or reordered. Renamed slots need renaming in game code
+    that looks them up by name.
 
     Args:
         project_path: Absolute path to the skeleton .json.
@@ -439,6 +452,110 @@ def add_attachment(
 
 
 @mcp.tool()
+@_asks
+def add_clipping(
+    project_path: str,
+    slot: str,
+    vertices: list[list[float]],
+    name: str = "clip",
+    end: str | None = None,
+    skin: str = "default",
+    world: bool = False,
+    convex: bool = False,
+    inverse: bool = False,
+    set_as_setup: bool = True,
+    replace: bool = False,
+    color: str | None = None,
+    out_path: str | None = None,
+    allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
+) -> dict:
+    """Add a clipping attachment: a polygon on `slot` that clips every slot
+    drawn after it, up to and including `end` (default: the last slot), e.g.
+    a mask for a window or a mouth. The result lists the slots it clips.
+
+    A slot shows one attachment at a time, so give the clip its own slot
+    (edit_rig add_slot, drawn just before the slots to clip). Turn a clip on
+    and off with an attachment timeline on that slot. The Spine 4.3 editor
+    (4.3.26) ignores convex and inverse when it imports JSON (the result
+    notes when that matters); the runtime reads them.
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        slot: The clip's slot.
+        vertices: The polygon's points, [[x, y], ...], relative to the slot's
+            bone (y up), or world points with world=true; at least 3.
+        name: Attachment name.
+        end: Last slot clipped; default every slot drawn after `slot`.
+        skin: Skin to add it to (created if missing).
+        world: vertices are world-space points.
+        convex: (4.3) The polygon is convex, which clips faster.
+        inverse: (4.3) Hide what is inside the polygon instead of outside.
+        set_as_setup: Show the clip in the setup pose (sets the slot's attachment).
+        replace: Overwrite an attachment of the same name.
+        color: RRGGBBAA, how the editor draws the polygon.
+        out_path: Write to this path instead of editing in place.
+        allow_version_mismatch: Edit even though the file's format version
+            differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
+    """
+    return edit_skeleton(
+        project_path,
+        lambda doc: att_ops.add_clipping(doc, slot, vertices, name, skin, end, world, convex, inverse,
+                                         set_as_setup, replace, color),
+        out_path,
+        allow_version_mismatch=allow_version_mismatch,
+        save_project_version=save_project_version,
+    )
+
+
+@mcp.tool()
+@_asks
+def set_draw_order_keys(
+    project_path: str,
+    animation: str,
+    keys: list[dict],
+    folder: str | None = None,
+    out_path: str | None = None,
+    allow_version_mismatch: bool = False,
+    save_project_version: bool = False,
+) -> dict:
+    """Set an animation's draw order keys, replacing the ones it has: the
+    whole skeleton's draw order, or (4.3) one draw order folder's, which reorders
+    only that folder's slots, independently of other keys (e.g. a hand
+    passing in front of the face while the body's order is keyed elsewhere).
+
+    A draw order folder is the slots named "<folder>/...", next to each other in
+    the draw order; edit_rig rename_slot puts slots in one.
+
+    Each key is {"time": seconds, "order": [slot names, back to front]};
+    a key without order returns to the setup order. For the whole draw order,
+    order lists every slot; for a folder, all its slots. No keys removes the
+    timeline.
+
+    Args:
+        project_path: Absolute path to the skeleton .json.
+        animation: An existing animation (add_animation creates one).
+        keys: e.g. [{"time": 0, "order": ["face/hand", "face/eye"]}, {"time": 0.5}].
+        folder: (4.3) A draw order folder; default the whole draw order. The Spine
+            4.3 editor (4.3.26) drops a nested folder's keys on import.
+        out_path: Write to this path instead of editing in place.
+        allow_version_mismatch: Edit even though the file's format version
+            differs from the game project's (only when the user said so).
+        save_project_version: Save the file's version as the game project's
+            .spine-version (when the project's version was unclear).
+    """
+    return edit_skeleton(
+        project_path,
+        lambda doc: anim_ops.set_draw_order_keys(doc, animation, keys, folder),
+        out_path,
+        allow_version_mismatch=allow_version_mismatch,
+        save_project_version=save_project_version,
+    )
+
+
+@mcp.tool()
 def pack_atlas(project_path: str, atlas_path: str | None = None) -> dict:
     """Repack the atlas from the skeleton's images folder (one PNG per
     attachment path), e.g. after editing part images. The atlas format is the
@@ -508,7 +625,8 @@ def spine_import(
     standard place). The editor imports only JSON of its own format version,
     so the editor is picked for the file's version (newest installed stable
     release, or $SPINE_EDITOR_VERSION); its reader reports anything it cannot
-    load.
+    load. changed_on_import lists what the 4.3 editor's import changes
+    (clipping convex/inverse, nested folders' draw order keys).
 
     Args:
         project_path: Absolute path to the skeleton .json.

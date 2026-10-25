@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from ..edits import EditError
 from ..spine import document as d
+from .animation import keep_draw_order_keys
 
 _BONE_FIELDS = ("x", "y", "rotation", "scaleX", "scaleY", "shearX", "shearY", "length", "inherit", "color")
 _BONE_DEFAULTS = {"x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1, "shearX": 0, "shearY": 0,
@@ -43,7 +44,7 @@ def _set_fields(target: dict, fields: dict, allowed, defaults) -> None:
             target[key] = value
 
 
-def _require_normal_chain(doc: dict, name: str) -> None:
+def require_normal_chain(doc: dict, name: str) -> None:
     _bone(doc, name)
     by_name = d.bone_map(doc)
     for b in [name, *d.ancestors(doc, name)]:
@@ -129,7 +130,7 @@ def add_bone(doc: dict, name: str, parent: str, world: bool = False, **fields) -
     _bone(doc, parent)
     bone = {"name": name, "parent": parent}
     if world:
-        _require_normal_chain(doc, parent)
+        require_normal_chain(doc, parent)
         wx, wy = fields.pop("x", 0.0), fields.pop("y", 0.0)
         p = d.world_transforms(doc)[parent]
         fields["x"], fields["y"] = (round(v, 4) for v in p.inverse_vector(wx - p.x, wy - p.y))
@@ -159,8 +160,8 @@ def _reparent(doc: dict, name: str, parent: str) -> None:
     _bone(doc, parent)
     if parent == name or parent in _descendants(doc, name):
         raise EditError(f"cannot parent {name!r} to its own descendant {parent!r}")
-    _require_normal_chain(doc, name)
-    _require_normal_chain(doc, parent)
+    require_normal_chain(doc, name)
+    require_normal_chain(doc, parent)
     world = d.world_transforms(doc)
     me, new_parent = world[name], world[parent]
     bone = _bone(doc, name)
@@ -180,7 +181,7 @@ def move_pivot(doc: dict, name: str, x: float = 0.0, y: float = 0.0, to: list[fl
     """Move a bone's pivot by a world-space delta (x, y), or to world point
     `to`, without moving its art: children, attachments on its slots and
     weighted influences are shifted back by the same amount."""
-    _require_normal_chain(doc, name)
+    require_normal_chain(doc, name)
     world = d.world_transforms(doc)
     me = world[name]
     dx, dy = (to[0] - me.x, to[1] - me.y) if to is not None else (x, y)
@@ -265,16 +266,45 @@ def remove_bone(doc: dict, name: str) -> dict:
     return {"op": "remove_bone", "bone": name}
 
 
-def add_slot(doc: dict, name: str, bone: str, attachment: str | None = None, index: int | None = None, **fields) -> dict:
+def _slot_names(doc: dict) -> list[str]:
+    return [s["name"] for s in d.slots(doc)]
+
+
+def _check_slot_name(doc: dict, name) -> None:
+    if not isinstance(name, str) or not name or any(not part for part in name.split("/")):
+        raise EditError(f"bad slot name {name!r} (a '/' puts it in a draw order folder: folder/name)")
     if name in d.slot_map(doc):
         raise EditError(f"slot {name!r} already exists")
+
+
+def _keep_folders_together(before: list[str], after: list[str]) -> None:
+    """The editor pulls a folder's slots together when it imports JSON, which
+    changes the draw order; refuse a change that splits a folder."""
+    split = [f for f in d.split_folders(after) if f not in d.split_folders(before)]
+    if split:
+        held = d.draw_order_folders(after)[split[0]]
+        raise EditError(f"draw order folder {split[0]!r} ({', '.join(held)}) would no longer be together in the draw "
+                        "order; keep a folder's slots next to each other (rename_slot moves a slot in or out "
+                        "of a folder)")
+
+
+def _kept_keys(doc: dict, before: list[str], renamed: dict | None = None, folders_renamed: dict | None = None) -> dict:
+    notes = keep_draw_order_keys(doc, before, renamed, folders_renamed)
+    return {"notes": notes} if notes else {}
+
+
+def add_slot(doc: dict, name: str, bone: str, attachment: str | None = None, index: int | None = None, **fields) -> dict:
+    _check_slot_name(doc, name)
     _bone(doc, bone)
+    before = _slot_names(doc)
     slot = {"name": name, "bone": bone}
     _set_fields(slot, {"attachment": attachment, **fields}, _SLOT_FIELDS, {"blend": "normal"})
+    at = len(before) if index is None else index
+    _keep_folders_together(before, before[:at] + [name] + before[at:])
     slots = doc.setdefault("slots", [])
-    slots.insert(len(slots) if index is None else index, slot)
+    slots.insert(at, slot)
     return {"op": "add_slot", "slot": name, "bone": bone, "draw_index": slots.index(slot),
-            **_draw_order_note(doc)}
+            **_kept_keys(doc, before)}
 
 
 def set_slot(doc: dict, name: str, bone: str | None = None, **fields) -> dict:
@@ -291,8 +321,8 @@ def _rebind_slot(doc: dict, name: str, bone: str) -> None:
     scaled bones too)."""
     slot = _slot(doc, name)
     _bone(doc, bone)
-    _require_normal_chain(doc, slot["bone"])
-    _require_normal_chain(doc, bone)
+    require_normal_chain(doc, slot["bone"])
+    require_normal_chain(doc, bone)
     world = d.world_transforms(doc)
     old, new = world[slot["bone"]], world[bone]
     to_new = d.mat_mul(d.mat_inv(d.matrix(new)), d.matrix(old))
@@ -330,13 +360,9 @@ def remove_slot(doc: dict, name: str) -> dict:
               for skin in d.skins(doc) for slot, atts in (skin.get("attachments") or {}).items()
               for att_name, att in (atts or {}).items()
               if (att or {}).get("type") == "linkedmesh" and att.get("slot") == name and slot != name]
-    users += [f"drawOrder keys of {anim_name}" for anim_name, anim in (doc.get("animations") or {}).items()
-              if any(o.get("slot") == name for k in (anim or {}).get("drawOrder") or [] for o in k.get("offsets") or [])]
-    users += [f"draw order folder {folder} of {anim_name}" for anim_name, anim in (doc.get("animations") or {}).items()
-              for folder, spec in ((anim or {}).get("drawOrderFolder") or {}).items()
-              if name in ((spec or {}).get("slots") or [])]
     if users:
         raise EditError(f"slot {name!r} is still used by {', '.join(users)}; change those first")
+    before = _slot_names(doc)
     doc["slots"] = [s for s in d.slots(doc) if s["name"] != name]
     for skin in d.skins(doc):
         (skin.get("attachments") or {}).pop(name, None)
@@ -344,13 +370,91 @@ def remove_slot(doc: dict, name: str) -> dict:
         ((anim or {}).get("slots") or {}).pop(name, None)
         for skin_atts in ((anim or {}).get("attachments") or {}).values():
             (skin_atts or {}).pop(name, None)
-    return {"op": "remove_slot", "slot": name, **_draw_order_note(doc)}
+    return {"op": "remove_slot", "slot": name, **_kept_keys(doc, before)}
+
+
+def _renamed_keys(mapping, renamed: dict[str, str]):
+    """`mapping` with its keys renamed at once, each keeping its place."""
+    if not isinstance(mapping, dict):
+        return mapping
+    return {renamed.get(k, k): v for k, v in mapping.items()}
+
+
+def _rename_slots(doc: dict, renamed: dict[str, str]) -> None:
+    """Rename slots everywhere the format names them."""
+    slot_key, source_key = d.path_slot_key(doc), d.linked_mesh_key(doc)
+    for s in d.slots(doc):
+        s["name"] = renamed.get(s["name"], s["name"])
+    for c in d.constraints(doc, "path"):
+        if c.get(slot_key) in renamed:
+            c[slot_key] = renamed[c[slot_key]]
+    for skin in d.skins(doc):
+        if "attachments" in skin:
+            skin["attachments"] = _renamed_keys(skin["attachments"], renamed)
+        for atts in (skin.get("attachments") or {}).values():
+            for att in (atts or {}).values():
+                if not isinstance(att, dict):
+                    continue
+                if att.get("type") == "clipping" and att.get("end") in renamed:
+                    att["end"] = renamed[att["end"]]
+                if att.get("type") == "linkedmesh" and source_key == "source" and att.get("slot") in renamed:
+                    att["slot"] = renamed[att["slot"]]  # 4.3: the source mesh's slot
+    for anim in (doc.get("animations") or {}).values():
+        if not isinstance(anim, dict):
+            continue
+        if "slots" in anim:
+            anim["slots"] = _renamed_keys(anim["slots"], renamed)
+        for skin_name, slots in list((anim.get("attachments") or {}).items()):
+            anim["attachments"][skin_name] = _renamed_keys(slots, renamed)
+    # draw order keys are renamed by keep_draw_order_keys
+
+
+def rename_slot(doc: dict, name: str, to: str) -> dict:
+    """Rename a slot everywhere. A '/' puts it in a draw order folder (head ->
+    face/head); without one it leaves its folder."""
+    _slot(doc, name)
+    _check_slot_name(doc, to)
+    before = _slot_names(doc)
+    _keep_folders_together(before, [to if n == name else n for n in before])
+    _rename_slots(doc, {name: to})
+    return {"op": "rename_slot", "slot": name, "to": to, **_kept_keys(doc, before, {name: to}),
+            "note": "game code that looks the slot up by name needs the new name"}
+
+
+def rename_folder(doc: dict, name: str, to: str) -> dict:
+    """Rename a draw order folder (renaming its slots), moving its draw order keys
+    along; to='' takes its slots out of it, into its parent folder."""
+    names = _slot_names(doc)
+    folders = d.draw_order_folders(names)
+    if name not in folders:
+        raise EditError(f"no draw order folder {name!r} (have {', '.join(folders) or 'none'})")
+    if to and any(not part for part in to.split("/")):
+        raise EditError(f"bad folder name {to!r}")
+
+    def moved(path: str) -> str:
+        rest = path[len(name) + 1:]
+        return f"{to}/{rest}" if to else rest
+
+    renamed = {s: moved(s) for s in folders[name]}
+    taken = set(names) - set(renamed)
+    clash = [n for n in renamed.values() if n in taken]
+    if clash:
+        raise EditError(f"slot {clash[0]!r} already exists")
+    if not to and any(n in folders for n in renamed.values()):
+        raise EditError(f"a slot of {name!r} would get the name of a folder")
+    folders_renamed = {f: (f"{to}{f[len(name):]}" if to else f[len(name) + 1:]) for f in folders
+                       if f == name or f.startswith(name + "/")}
+    _keep_folders_together(names, [renamed.get(n, n) for n in names])
+    _rename_slots(doc, renamed)
+    return {"op": "rename_folder", "folder": name, "to": to, "slots": renamed,
+            **_kept_keys(doc, names, renamed, folders_renamed),
+            "note": "game code that looks these slots up by name needs the new names"}
 
 
 def set_draw_order(doc: dict, order: list[str] | None = None, slot: str | None = None, index: int | None = None) -> dict:
     """Reorder slots (first drawn first, at the back): give the full `order`,
-    or move one `slot` to `index`."""
-    names = [s["name"] for s in d.slots(doc)]
+    or move one `slot` to `index`. Draw order keys keep showing what they did."""
+    names = _slot_names(doc)
     if order is not None:
         if sorted(order) != sorted(names):
             missing, extra = set(names) - set(order), set(order) - set(names)
@@ -361,23 +465,16 @@ def set_draw_order(doc: dict, order: list[str] | None = None, slot: str | None =
         order.insert(max(0, min(index, len(order))), slot)
     else:
         raise EditError("give order, or slot and index")
+    _keep_folders_together(names, order)
     by_name = d.slot_map(doc)
     doc["slots"] = [by_name[n] for n in order]
-    return {"op": "set_draw_order", "order": order, **_draw_order_note(doc)}
-
-
-def _draw_order_note(doc: dict) -> dict:
-    keyed = [n for n, a in (doc.get("animations") or {}).items()
-             if (a or {}).get("drawOrder") or (a or {}).get("drawOrderFolder")]
-    if not keyed:
-        return {}
-    return {"note": f"draw order keys in {', '.join(keyed)} are offsets from the setup order; re-check them"}
+    return {"op": "set_draw_order", "order": order, **_kept_keys(doc, names)}
 
 
 _OPS = {
     "add_bone": add_bone, "set_bone": set_bone, "move_pivot": move_pivot, "rename_bone": rename_bone,
-    "remove_bone": remove_bone, "add_slot": add_slot, "set_slot": set_slot, "remove_slot": remove_slot,
-    "set_draw_order": set_draw_order,
+    "remove_bone": remove_bone, "add_slot": add_slot, "set_slot": set_slot, "rename_slot": rename_slot,
+    "rename_folder": rename_folder, "remove_slot": remove_slot, "set_draw_order": set_draw_order,
 }
 OP_NAMES = tuple(_OPS)
 

@@ -80,7 +80,8 @@ def _with_43_features(rig):
     _named(doc)["leg"]["scaleY"] = "volume"
     doc["skins"][0]["attachments"]["path"]["clip"] = {"type": "clipping", "vertexCount": 3,
                                                        "vertices": [0, 0, 1, 0, 0, 1], "convex": True}
-    doc["animations"]["move"]["drawOrderFolder"] = {"f": {"slots": ["body"], "keys": [{}]}}
+    doc["animations"]["move"]["drawOrderFolder"] = [{"slots": ["body", "body_alt"], "keys": [
+        {"time": 0.5, "offsets": [{"slot": "body", "offset": 1}]}]}]
     doc["bones"][1]["iconSize"] = 2
     return doc
 
@@ -92,11 +93,15 @@ def test_downgrade_refuses_what_42_cannot_hold(rig):
         convert(doc, "4.2")
     text = " | ".join(lossy.value.losses)
     for expected in ("slider 'sl'", "transform 't_rel' maps rotate to x", "IK 'leg' scaleY 'volume'",
-                     "clipping default/path/clip convex", "draw order folders"):
+                     "clipping default/path/clip convex"):
         assert expected in text
+    assert "draw order" not in text  # folded, not lost
     doc["constraints"].insert(0, doc["constraints"].pop())  # the slider first: orders must still be 0..n-1
     down = convert(doc, "4.2", allow_lossy=True)
-    assert len(down.lost) == 5 and down.dropped_editor_data == ["bone 'driver' iconSize"]
+    assert len(down.lost) == 4 and down.dropped_editor_data == ["bone 'driver' iconSize"]
+    assert any("folded into whole draw order keys" in c for c in down.changed)
+    assert down.doc["animations"]["move"]["drawOrder"] == [  # body_alt, body, path
+        {"time": 0.5, "offsets": [{"slot": "body", "offset": 1}, {"slot": "body_alt", "offset": -1}]}]
     orders = sorted(c["order"] for _, c in d.all_constraints(down.doc))
     assert orders == list(range(len(orders))) and d.never_applied(down.doc) == []
     assert check(down.doc) == []
