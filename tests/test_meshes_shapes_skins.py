@@ -485,6 +485,10 @@ def test_older_43_editors_get_the_changelogs_caveats(doc, doc43):
     assert editor_caveats("4.3.10", doc43) == ["Spine 4.3.10 predates the 4.3.14 fix for CLI data import (it could "
                                                "crash)", "use Spine 4.3.26 or newer"]
     assert editor_caveats("4.3.26", doc43) == [] and editor_caveats("4.3.27", doc43) == []
+    assert "4.3.05 fix for keeping a Bezier curve's handle" in editor_caveats("4.3.04", doc43)[0]  # idle eases
+    add_animation(doc43, "snap", timelines={"bones": {"head": {"rotate": [{"value": 0}, {"time": 1, "value": 9}]}}})
+    del doc43["animations"]["idle"]
+    assert not any("4.3.05" in c for c in editor_caveats("4.3.04", doc43))  # linear keys only
     assert "beta" in editor_caveats("4.3.39-beta", doc43)[0]
     assert editor_caveats("4.2.43", doc) == []
 
