@@ -24,7 +24,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import editor_quirks
+from . import editor_quirks, runtime
 from .spine import document as d
 from .spine import versions
 
@@ -206,8 +206,8 @@ def spine_import(
     if changed:
         result["changed_on_import"] = changed
     if run.ok and editor_quirks.save_record(target, skeleton_name or project_path.stem, project_path, doc):
-        result["note"] = ("recorded what the editor's import loses; JSON exports from this project with "
-                          "spine_export put it back")
+        result["note"] = ("recorded what the editor's import loses; JSON and binary exports from this project "
+                          "with spine_export put it back")
     return result
 
 
@@ -315,15 +315,19 @@ def spine_export(
         record = editor_quirks.record_path(input_path)
         if restore and run.ok and input_path.suffix.lower() == ".spine" and record.is_file():
             saved = json.loads(record.read_text(encoding="utf-8"))
-            if format == "json":
-                target = output_dir / f"{saved.get('skeleton')}.json"
-                restored = editor_quirks.restore(target, saved) if target.is_file() else []
-                if restored:
-                    out["restored"] = restored
+            target = output_dir / f"{saved.get('skeleton')}.{'json' if format == 'json' else 'skel'}"
+            if not target.is_file():
+                done = {"restored": [], "errors": [f"the export has no {target.name}"]}
+            elif format == "json":
+                done = {"restored": editor_quirks.restore(target, saved), "errors": []}
             else:
+                done = runtime.restore_binary(target, saved)
+            if done["restored"]:
+                out["restored"] = done["restored"]
+            if done["errors"]:
                 out.setdefault("warnings", []).append(
-                    "the editor's import lost clip convex/inverse flags or nested folder keys that a binary export "
-                    "cannot get back; export json to have them restored")
+                    "the editor's import lost clip convex/inverse flags or nested folder keys, and they could not be "
+                    f"put back ({'; '.join(done['errors'])})")
         if version and exported and exported != version:
             out.setdefault("warnings", []).append(
                 f"exported by Spine {run.editor}: the data is format {exported}, not the {version} asked for")

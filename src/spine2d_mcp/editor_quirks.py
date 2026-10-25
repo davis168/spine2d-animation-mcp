@@ -5,10 +5,10 @@ Seen with editor 4.3.26 (the newest stable 4.3 release): its JSON import
 does not read a clipping attachment's `convex` or `inverse` (every clip comes
 in convex and not inverse), and drops draw order keys of a nested draw order
 folder or of slots that are not one folder. `spine_import` records what the
-skeleton had in `<project>.spine.mcp-restore.json`; a JSON `spine_export`
-from that project puts it back where the export still shows the editor's
-default, so a change made in the editor wins. Binary exports cannot be
-patched and say so.
+skeleton had in `<project>.spine.mcp-restore.json`; a JSON or binary
+`spine_export` from that project puts it back where the export still shows
+the editor's default, so a change made in the editor wins (binary files are
+patched by `runtime.restore_binary`). Rendered frames cannot be.
 """
 
 from __future__ import annotations

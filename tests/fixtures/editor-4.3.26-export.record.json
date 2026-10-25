@@ -1,0 +1,84 @@
+{
+  "skeleton": "test_character",
+  "source": "editor-4.3.26-export.json",
+  "clips": [
+    [
+      "default",
+      "mask",
+      "clip",
+      {
+        "convex": false,
+        "inverse": true
+      }
+    ],
+    [
+      "default",
+      "notch",
+      "clip",
+      {
+        "convex": false,
+        "inverse": false
+      }
+    ],
+    [
+      "armor",
+      "mask",
+      "armor_clip",
+      {
+        "convex": true,
+        "inverse": true
+      }
+    ]
+  ],
+  "folder_keys": {
+    "swap": [
+      {
+        "slots": [
+          "arms/hands/hand_left",
+          "arms/hands/hand_right"
+        ],
+        "keys": [
+          {
+            "time": 0.5,
+            "offsets": [
+              {
+                "slot": "arms/hands/hand_left",
+                "offset": 1
+              },
+              {
+                "slot": "arms/hands/hand_right",
+                "offset": -1
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "mixed": [
+      {
+        "slots": [
+          "arms/hands/hand_left",
+          "arms/hands/hand_right"
+        ],
+        "keys": [
+          {
+            "time": 0.3,
+            "offsets": [
+              {
+                "slot": "arms/hands/hand_left",
+                "offset": 1
+              },
+              {
+                "slot": "arms/hands/hand_right",
+                "offset": -1
+              }
+            ]
+          },
+          {
+            "time": 0.9
+          }
+        ]
+      }
+    ]
+  }
+}

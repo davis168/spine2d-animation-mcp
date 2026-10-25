@@ -859,7 +859,7 @@ class _Checker:
                 self.warn(npath, f"folder {name!r} is keyed twice; the later timeline wins")
             elif "/" in name:
                 self.warn(npath, f"keys nested folder {name!r}: the Spine 4.3 editor (4.3.26) drops them on "
-                                 "import; the runtime plays them")
+                                 "import (spine_export puts them back); the runtime plays them")
             if name:
                 keyed.add(name)
             if "keys" not in folder:

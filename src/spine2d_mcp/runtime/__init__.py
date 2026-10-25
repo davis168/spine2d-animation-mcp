@@ -19,6 +19,7 @@ from ..atlas import default_atlas
 from ..spine import versions
 
 _SCRIPT = Path(__file__).with_name("runtime_check.mjs")
+_RESTORE = Path(__file__).with_name("binary_restore.mjs")
 
 
 def cache_dir(core_version: str) -> Path:
@@ -91,6 +92,28 @@ def runtime_check(project_path: str | Path, atlas_path: str | Path | None = None
     project_path = Path(project_path)
     atlas_path = Path(atlas_path) if atlas_path else default_atlas(project_path)
     return _run(project_path, atlas_path, poses=False, release=release)
+
+
+def restore_binary(skel_path: str | Path, record: dict) -> dict:
+    """Put back in a 4.3 binary skeleton what the editor's JSON import lost
+    (an editor_quirks record), with spine-core's own reader finding the bytes:
+    {"restored": [...], "errors": [...]}. The file changes only when the
+    patched data reads back as intended."""
+    node = shutil.which("node")
+    if node is None:
+        return {"restored": [], "errors": ["node not found"]}
+    core, reason = _ensure_core(versions.get("4.3").runtime)
+    if core is None:
+        return {"restored": [], "errors": [reason]}
+    try:
+        proc = subprocess.run([node, str(_RESTORE), str(skel_path), str(core)], input=json.dumps(record),
+                              capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"restored": [], "errors": ["restoring the binary timed out after 300 s"]}
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {"restored": [], "errors": [(proc.stderr or proc.stdout).strip()[-500:]]}
 
 
 def compare_poses(original: str | Path, converted: str | Path, atlas_path: str | Path,

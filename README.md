@@ -80,7 +80,7 @@ A draw order key may give `"order"` (every slot, back to front) instead of the o
 
 - **IK** aims a bone's x axis at the target, so it suits rigs whose bones point along their limbs. Importer rigs have unrotated bones; `add_constraint` warns when the setup pose would swing. Aim importer limbs with rotate keys.
 - **Automatic weights** follow distance only, not the image's shape; check bends in the preview and adjust with `weights` where needed.
-- **What the Spine 4.3 editor (4.3.26) loses when it imports JSON**: it does not read clipping `convex` and `inverse` (every clip comes in convex, none inverse) and drops a nested draw order folder's keys; the runtimes read them. `spine_import` records them beside the `.spine` project and JSON exports with `spine_export` put them back (binary exports and rendered frames say they cannot).
+- **What the Spine 4.3 editor (4.3.26) loses when it imports JSON**: it does not read clipping `convex` and `inverse` (every clip comes in convex, none inverse) and drops a nested draw order folder's keys; the runtimes read them. `spine_import` records them beside the `.spine` project and `spine_export` puts them back in JSON and binary exports (a binary file is patched where spine-core's own reader finds the bytes, then read back to check); rendered frames say they cannot.
 - `move_pivot`, reparenting and slot rebinding work in world space and require `inherit: normal` along the chain.
 
 ## Spine versions

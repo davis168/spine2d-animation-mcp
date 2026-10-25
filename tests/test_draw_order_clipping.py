@@ -6,12 +6,14 @@ import itertools
 import json
 import random
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from spine2d_mcp import server, spine_cli
+from spine2d_mcp import runtime, server, spine_cli
 from spine2d_mcp.edits import EditError
+from spine2d_mcp.editor_quirks import record_path
 from spine2d_mcp.ops import attachments as att
 from spine2d_mcp.ops import rig
 from spine2d_mcp.ops.animation import (add_animation, draw_order_from_offsets, draw_order_offsets,
@@ -424,10 +426,71 @@ def test_json_exports_get_back_what_the_43_editor_import_lost(imported43, tmp_pa
     assert entry == d.load(path)["animations"]["swap"]["drawOrderFolder"][0]
     assert _errors(back) == []
     binary = server.spine_export(made["spine_project"], str(tmp_path / "bin"), "binary", format_version="4.3")
-    assert any("binary export cannot get back" in w for w in binary["warnings"])
+    assert binary["restored"] == out["restored"] and not binary.get("warnings"), binary
+    # Read back by spine-core: nothing is left at the editor's defaults to restore.
+    skel = next(f for f in binary["files"] if f.endswith(".skel"))
+    assert runtime.restore_binary(skel, json.loads(record_path(made["spine_project"]).read_text())) == \
+        {"restored": [], "errors": []}
     kept = server.spine_export(made["spine_project"], str(tmp_path / "raw"), "json", format_version="4.3",
                                restore=False)
     assert "restored" not in kept
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+# Clip flags and the draw order at every 1/60 s of every animation, as spine-core 4.3 plays a .json or .skel.
+PLAYED = """
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [core, file] = process.argv.slice(1);
+const spine = await import(pathToFileURL(core).href);
+const atlas = new spine.TextureAtlas("page.png\\nsize: 2,2\\nfilter: Linear,Linear\\nregion\\nbounds: 0,0,2,2\\n");
+atlas.findRegion = () => atlas.regions[0];
+const loader = new spine.AtlasAttachmentLoader(atlas);
+const data = file.endsWith(".skel")
+  ? new spine.SkeletonBinary(loader).readSkeletonData(new Uint8Array(readFileSync(file)))
+  : new spine.SkeletonJson(loader).readSkeletonData(readFileSync(file, "utf8"));
+const out = { clips: {}, orders: {} };
+for (const skin of data.skins)
+  for (const e of skin.getAttachments())
+    if (e.attachment instanceof spine.ClippingAttachment)
+      out.clips[`${skin.name}/${data.slots[e.slotIndex].name}`] = [e.attachment.convex, e.attachment.inverse];
+for (const anim of data.animations) {
+  const sk = new spine.Skeleton(data), orders = [];
+  for (let f = 0; f <= Math.ceil(anim.duration * 60); f++) {
+    sk.setupPose();
+    anim.apply(sk, 0, f / 60, false, [], 1, spine.MixFrom.setup, false, false, false);
+    orders.push(sk.drawOrder.appliedPose.map((s) => s.data.name).join());
+  }
+  out.orders[anim.name] = orders;
+}
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _played(path):
+    core = runtime.cache_dir("4.3.13") / "node_modules" / "@esotericsoftware" / "spine-core" / "dist" / "index.js"
+    proc = subprocess.run(["node", "--input-type=module", "-e", PLAYED, str(core), str(path)],
+                          capture_output=True, text=True, check=True)
+    return json.loads(proc.stdout)
+
+
+@needs_node
+def test_binary_exports_get_back_what_the_43_editor_import_lost(tmp_path):
+    # Exported by editor 4.3.26 from a .spine that spine_import made of editor-4.3.26-export.json.
+    skel = tmp_path / "hero.skel"
+    shutil.copy(FIXTURES / "editor-4.3.26-export.skel", skel)
+    record = json.loads((FIXTURES / "editor-4.3.26-export.record.json").read_text())
+    runtime.restore_binary(skel, {})  # installs spine-core 4.3.13 when missing
+    written = _played(FIXTURES / "editor-4.3.26-export.json")
+    assert _played(skel) != written
+    done = runtime.restore_binary(skel, record)
+    assert done["errors"] == [] and len(done["restored"]) == 5, done
+    assert _played(skel) == written
+    assert runtime.restore_binary(skel, record) == {"restored": [], "errors": []}
+    shutil.copy(FIXTURES / "editor-4.3.26-export.skel", skel)
+    stale = {"folder_keys": {"swap": [{**record["folder_keys"]["swap"][0], "slots": ["no_such_slot"]}]}}
+    assert runtime.restore_binary(skel, stale) == {"restored": [], "errors": []}
+    assert skel.read_bytes() == (FIXTURES / "editor-4.3.26-export.skel").read_bytes()
 
 
 @needs_node

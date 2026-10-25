@@ -22,8 +22,8 @@ from .rig import require_normal_chain
 
 # Seen with the Spine 4.3.26 editor: its JSON import ignores both clipping flags.
 EDITOR_CLIP_NOTE = ("the Spine 4.3 editor (4.3.26) ignores convex and inverse when it imports JSON: every clip "
-                    "comes in convex (a concave one clips to its hull) and not inverse; set them again in the "
-                    "editor after spine_import, or ship this JSON as it is")
+                    "comes in convex (a concave one clips to its hull) and not inverse; spine_import records "
+                    "them and spine_export puts them back in the project's JSON and binary exports")
 
 
 def images_dir(project_path: str | Path, doc: dict) -> Path:

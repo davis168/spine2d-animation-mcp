@@ -980,9 +980,10 @@ def spine_export(
     - json / binary: skeleton data in a format version: a JSON input keeps its
       own; a .spine project exports in format_version, else the game
       project's (from output_dir), else $SPINE_FORMAT_VERSION, else it asks.
-      A JSON export from a project made by spine_import gets back what the
-      4.3 editor's import lost (clip convex/inverse, nested folder keys),
-      unless restore=false or the export shows it was changed in the editor.
+      A JSON or binary export from a project made by spine_import gets back
+      what the 4.3 editor's import lost (clip convex/inverse, nested folder
+      keys), unless restore=false or the export shows it was changed in the
+      editor.
 
     Args:
         input_path: Skeleton .json or .spine project.
@@ -998,7 +999,7 @@ def spine_export(
             project's (only when the user said so).
         save_project_version: Save format_version as the game project's
             .spine-version (when the project did not say).
-        restore: Put back what the editor's import lost (JSON exports).
+        restore: Put back what the editor's import lost (json and binary).
     """
     source = Path(input_path)
     game = None

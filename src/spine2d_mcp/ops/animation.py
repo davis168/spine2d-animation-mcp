@@ -91,7 +91,8 @@ def add_animation(
 # back-to-front order instead, and is turned into offsets here.
 
 NESTED_FOLDER_NOTE = ("the Spine 4.3 editor (4.3.26) drops a nested folder's draw order keys when it imports "
-                      "JSON; the runtime plays them")
+                      "JSON (spine_export puts them back in the project's JSON and binary exports); the runtime "
+                      "plays them")
 
 def draw_order_offsets(base: list[str], order: list[str], where: str = "order") -> list[dict]:
     """The offsets that turn `base` (setup order) into `order`."""
