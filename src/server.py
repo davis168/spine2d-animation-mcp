@@ -69,9 +69,25 @@ def import_psd_to_spine(
     format_version: str | None = None,
     allow_version_mismatch: bool = False,
     save_project_version: bool = False,
+    scale: float = 1.0,
+    padding: int = 1,
+    trim: bool = True,
+    ignore_hidden: bool = False,
 ) -> dict:
-    """Convert a PSD character into a Spine project (skeleton JSON + atlas +
-    PNG page(s) + per-part images) importable into the Spine editor.
+    """Convert a PSD into a Spine project (skeleton JSON + atlas + PNG page(s)
+    + one image per attachment under images/) importable into the Spine editor.
+
+    A PSD whose layer names use Spine's Import PSD tags ([bone], [slot],
+    [skin], [folder], [mesh], [mesh:name], [merge], [origin], [overlay],
+    [ignore], [scale], [rotate], [pad], [trim], [path], [bones], [slots],
+    [name:*] patterns, ...) is imported like the Spine editor's Import PSD:
+    nested [bone] groups become bones, layers go in slots in layer order,
+    [skin] groups become skins and placeholders, and hidden layers become
+    attachments that are not shown (importer "spine-tags"). An untagged PSD
+    whose layers are named after body parts (head, torso, arm_left, ...) is
+    auto-rigged instead (importer "body-parts"); any other untagged PSD gets
+    one slot per layer. Invalid or contradictory tags are refused with every
+    problem listed.
 
     The format version is format_version if given, else the game project's
     (from out_dir: its @esotericsoftware/spine-* dependency or .spine-version),
@@ -85,12 +101,18 @@ def import_psd_to_spine(
             uses another version (only when the user said so).
         save_project_version: Also save format_version as the game project's
             .spine-version (when the project did not say).
+        scale: Import PSD's Scale: images and the skeleton are scaled by it.
+        padding: Import PSD's Padding: transparent pixels around each image.
+        trim: Import PSD's Trim whitespace; false makes every image canvas-sized.
+        ignore_hidden: Import PSD's Ignore hidden layers; by default hidden
+            layers are imported as attachments the setup pose does not show.
     """
     src = Path(psd_path)
     if out_dir is None:
         out_dir = str(src.parent / f"{src.stem}_spine")
     version, game, notes = proj.for_new_file(out_dir, format_version, allow_version_mismatch, save_project_version)
-    result = _import(psd_path, out_dir, format_version=version)
+    result = _import(psd_path, out_dir, format_version=version, scale=scale, padding=padding, trim=trim,
+                     ignore_hidden=ignore_hidden)
     if save_project_version:
         notes.append(proj.save_declaration(game, version))
     return {
@@ -98,8 +120,11 @@ def import_psd_to_spine(
         "atlas_path": str(result.atlas_path),
         "png_paths": [str(p) for p in result.png_paths],
         "images_dir": str(result.images_dir),
+        "importer": result.importer,
+        "summary": summary(d.load(result.project_path)),
         "format_version": version,
         "version": game.note(version),
+        **({"warnings": result.warnings} if result.warnings else {}),
         **({"notes": notes} if notes else {}),
     }
 

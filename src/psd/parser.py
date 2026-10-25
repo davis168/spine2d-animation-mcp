@@ -47,8 +47,8 @@ class ParsedPsd:
     pivot_markers: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
-def parse_psd(file_path: str) -> ParsedPsd:
-    psd = PSDImage.open(file_path)
+def parse_psd(source: str | PSDImage) -> ParsedPsd:
+    psd = source if isinstance(source, PSDImage) else PSDImage.open(source)
     parsed = ParsedPsd(width=psd.width, height=psd.height, layers=[])
     _collect(psd, parsed)
     return parsed

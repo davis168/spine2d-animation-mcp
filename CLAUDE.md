@@ -49,7 +49,10 @@ uv run spine2d-mcp                        # run the server on stdio
 - Warnings: probably unintended.
 - The format source of truth is `reference/SkeletonJson-4.2.java` / `-4.3.java`. Behaviour questions are settled by running spine-core, not by reading.
 
-**The importer:** `psd/parser.py` → `psd/conventions.py` (bone hierarchy, cap pivots, `[pivot]` markers) → `spine/builder.py` (Pydantic `schema.py`) → `spine/writer.py`, then `atlas/` packs the images. Imported bones have length 0 and no setup rotation.
+**The importer** (`pipeline.py`) has two paths; `atlas/` packs the images for both, and imported bones have length 0 and no setup rotation.
+- A PSD with Spine's Import PSD tags, or an untagged one without body-part names: `psd/tags.py` (tag grammar; each attachment layer's slot, skin, placeholder, path and bone) → `psd/render.py` (pixels, overlays, trim/scale/rotate/pad) → `spine/psd_import.py` (the skeleton dict). Where the editor's docs are silent it follows Esoteric's PhotoshopToSpine script.
+- An untagged PSD with body-part names: `psd/parser.py` → `psd/conventions.py` (bone hierarchy, cap pivots, `[pivot]` markers) → `spine/builder.py` (Pydantic `schema.py`) → `spine/writer.py`.
+- The editor's Import PSD is GUI-only (its CLI refuses PSDs). Tag handling is checked by redrawing the setup pose from the written JSON against the PSD's composite (`tests/test_psd_tags.py`) and by editor round trips of the JSON.
 
 **Runtime checks.**
 - `runtime/__init__.py` installs a spine-core release per format version (or the game's installed release) and runs `runtime_check.mjs`. That script plays every animation in every skin, and in `--poses` mode dumps world transforms for `compare_poses`.

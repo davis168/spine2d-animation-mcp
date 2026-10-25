@@ -14,7 +14,7 @@ The Spine editor has no live scripting API, so the server works on the files (sk
 
 | Tool | What it does |
 |---|---|
-| `import_psd_to_spine` | Layered PSD → skeleton JSON, atlas, page PNG(s) and per-part images |
+| `import_psd_to_spine` | Layered PSD → skeleton JSON, atlas, page PNG(s) and per-attachment images; honours Spine's Import PSD tags (`[bone]`, `[slot]`, `[skin]`, `[mesh]`, ...) |
 | `inspect_skeleton` | Bones (setup and world positions), slots in draw order, skins, constraints, events, and what each animation keys |
 | `validate_skeleton` | Format check against the file's version, plus whether it matches the game project's; `runtime=true` also loads and plays it, with every skin, in spine-core (the game's installed release, else that version's tested one) |
 | `add_animation` / `remove_animation` | Presets (idle, walk, wave, jump) or keyframes with an easing shorthand; preset + keyframe overrides |
@@ -37,13 +37,30 @@ A typical session, in plain language to Claude: *"Import /path/to/hero.psd, add 
 
 ### The PSD importer
 
-Layers named after body parts (`head`, `body`/`torso`, `arm_left`, `hand_right`, `leg_left`, `foot_right`, …) become:
+`import_psd_to_spine` writes:
 
-- `<name>.json`: the skeleton (bones, slots, default skin, region attachments) in the game project's format version
-- `<name>.atlas` and `<name>.png`: the atlas, on the smallest power-of-two page that fits
-- `images/<part>.png`: one image per attachment; the Spine editor displays these, and the skeleton's `images` path points here
+- `<name>.json`: the skeleton, in the game project's format version
+- `<name>.atlas` and `<name>.png` (more pages when needed): the atlas
+- `images/<path>.png`: one image per attachment (a skin's images in its folder); the Spine editor displays these, and the skeleton's `images` path points here
 
-Rig conventions:
+The result's `importer` says which of two importers ran.
+
+**`spine-tags`**: a PSD whose layer names use Spine's [Import PSD tags](https://esotericsoftware.com/spine-import-psd) is imported the way the Spine editor's Import PSD does it (the editor offers that only in its GUI; its CLI refuses PSDs). An untagged PSD that is not a body-part PSD gets the same importer: one slot per layer on the root bone.
+
+- `[bone]` / `[bone:name]` groups become bones, nested groups child bones. A bone sits at the centre of its top visible layer (else its child bones' top visible layer), unrotated. A bone named in two groups (`hip [bone]` and `hip (2) [bone:hip]`, to interleave draw order) is one bone and must have one parent.
+- `[slot]` / `[slot:name]` puts layers in one slot; otherwise each layer is its own slot. Slots follow the layer order (the bottom layer is drawn first). A `/` in a slot name makes a slot folder; a folder split by another slot moves next to its last slot.
+- `[skin]` / `[skin:name]` makes skin placeholders: layer `coat` in `navy [skin]` is attachment `navy/coat` under placeholder `coat` in skin `navy`. `[folder]` prefixes attachment names and image paths, `[path:name]` names the image file, and a leading `/` ignores the parent groups.
+- Hidden layers become attachments the setup pose does not show (`ignore_hidden=true` leaves them out). A slot's setup attachment is its bottom visible layer.
+- `[mesh]` makes a 4-vertex mesh. `[mesh:name]` makes a linked mesh of the `[mesh]` in the same slot whose attachment name ends with `name` (by `/` segments), cut to its source's frame.
+- `[merge]` flattens a group into one image. `[overlay]` draws a layer onto every layer below it, clipped to them. Photoshop clipping masks are drawn into the layer they clip. `[ignore]` skips a layer or group, and adjustment layers are skipped.
+- `[scale:n]`, `[rotate:deg]` (the image turns counter-clockwise and the attachment turns it back), `[pad:n]` and `[trim]` / `[trim:false|canvas|mask]` per layer or group, and the editor's options `scale`, `padding` (default 1), `trim` (default true) and `ignore_hidden` (default false) for the whole PSD.
+- `[bones]` / `[slots]` tag a group's immediate children. `[name:*]`, `[path:*]`, `[bone:*]` and `[slot:*]` patterns rename what is below. `[!bones]`, `[!slots]`, `[!name]`, `[!path]`, `[!bone]` and `[!slot]` opt out.
+- The origin is an `[origin]` layer's centre, else the first vertical and horizontal guides, else the canvas centre. Linear dodge, multiply and screen layers give their slot that blend mode.
+- What the editor would refuse is refused, every problem listed: unknown or misplaced tags, a bone with two parents, two attachments under one placeholder in a skin and slot, a skin placeholder that is also a default skin attachment, a skin named `default`, a linked mesh without a source.
+
+Where the editor's documentation is silent, the importer follows Esoteric's PhotoshopToSpine script, which the editor's Import PSD replaced. A tagged dealer PSD (4 skins, 17 slots, linked meshes, hidden pose layers) imports with the structure of its hand-made rig; its setup pose, redrawn from the JSON and images, matches the PSD's composite; and it round-trips through Spine 4.2.43 and 4.3.26 unchanged.
+
+**`body-parts`**: an untagged PSD whose layers are named after body parts (`head`, `body`/`torso`, `arm_left`, `hand_right`, `leg_left`, `foot_right`, …) is auto-rigged:
 
 - **Multi-segment skeleton** (`root → hip → torso → chest → neck → head`, arms off `chest`, legs off `hip`); missing intermediate bones are created as positioned virtual bones.
 - **Joint pivots at the round cap** — arms and legs pivot at the centre of their joint-end cap (half the limb width in from the joint edge), so the cap stays put as the joint turns; hands and feet turn about the wrist and ankle (the parent limb's far cap); the head pivots at the chin. A `<part>[pivot]` marker layer overrides any of these.
@@ -157,10 +174,13 @@ src/
   editor_quirks.py     what the Spine editor's import loses, recorded and put back in exports
   runtime/             spine-core runtime check, pose comparison and binary restore (Node scripts + wrapper)
   ops/                 edits as pure functions: animation, rig, constraints, attachments, meshes, shapes, skins
-  psd/parser.py        PSD -> flat layer list (+ pivot markers)
+  psd/tags.py          Spine Import PSD tags: each attachment layer's slot, skin, placeholder, path, bone
+  psd/render.py        a tagged layer's image: overlays, trim, scale, rotate, padding
+  psd/parser.py        PSD -> flat layer list (+ pivot markers), for the body-part rigger
   psd/conventions.py   bone hierarchy, joint sides, cap pivots, [pivot] tag
-  spine/schema.py      Pydantic models the importer builds with
-  spine/builder.py     layers -> SpineProject
+  spine/psd_import.py  tagged layers -> skeleton JSON
+  spine/schema.py      Pydantic models the body-part rigger builds with
+  spine/builder.py     body-part layers -> SpineProject
   spine/writer.py      SpineProject -> JSON
   spine/validator.py   importer-level structural validation
   spine/versions.py    supported format versions and their editor/runtime releases
@@ -174,7 +194,7 @@ src/
   atlas/writer.py      .atlas text + composite PNG
 reference/             SkeletonJson-4.2.java, SkeletonJson-4.3.java (spine-runtimes), spineboy.atlas
 docs/adr/              decisions
-tests/                 pytest suite (synthetic PSD fixtures, a 4.2 rig using every constraint kind)
+tests/                 pytest suite (synthetic PSD fixtures, tagged PSDs, a 4.2 rig using every constraint kind)
 ```
 
 Format source of truth: `reference/SkeletonJson-4.2.java` and `reference/SkeletonJson-4.3.java` (spine-runtimes 4.2 and 4.3).
