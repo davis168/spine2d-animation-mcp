@@ -32,7 +32,21 @@ def _has_deform(doc: dict) -> bool:
                for timelines in (atts or {}).values() if isinstance(timelines, dict))
 
 
+def _curve_into_last_key(value) -> bool:
+    """A Bezier curve on the key before a timeline's last key, anywhere in
+    the animations (its second handle belongs to the last key)."""
+    if isinstance(value, dict):
+        return any(_curve_into_last_key(v) for v in value.values())
+    if isinstance(value, list):
+        keys = [k for k in value if isinstance(k, dict)]
+        return (len(keys) >= 2 and isinstance(keys[-2].get("curve"), list)) or \
+            any(_curve_into_last_key(k) for k in keys)
+    return False
+
+
 EDITOR_FIXES = (
+    ("4.3.05", "keeping a Bezier curve's handle into a timeline's last key (4.3.04 loses it and exports garbage)",
+     lambda doc: _curve_into_last_key(doc.get("animations"))),
     ("4.3.08", "importing bone-driven sliders",
      lambda doc: any(c.get("type") == "slider" and c.get("bone") for c in doc.get("constraints") or [])),
     ("4.3.14", "CLI data import (it could crash)", lambda doc: True),
