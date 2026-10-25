@@ -1,4 +1,4 @@
-"""Animation shorthand → Spine 4.2 wire format.
+"""Animation shorthand → Spine wire format (4.2 or 4.3).
 
 The shorthand is the wire format plus one convenience: a key may carry
 `"ease"` instead of a raw `"curve"`. As in Spine, a key's easing shapes the
@@ -15,7 +15,9 @@ segment that STARTS at that key (from it to the next key). Easing names:
 
 Spine stores a bezier per channel as absolute (time, value) handles,
 `[cx1, cy1, cx2, cy2]`, so the conversion needs both keys' values; a key with
-an explicit `"curve"` is passed through untouched.
+an explicit `"curve"` is passed through untouched. A value a key leaves out
+is the reader's default, which for a few timelines depends on the format
+version (a transform key's mixScaleY, the physics mix timeline).
 """
 
 from __future__ import annotations
@@ -79,15 +81,21 @@ _SLOT = {
 }
 _IK = _value_channels(("mix", "softness"), {"mix": 1.0})
 _PHYSICS = _value_channels(("value",), {})
+_ONE = _value_channels(("value",), {"value": 1.0})  # 4.3 physics mix; slider time and mix
 
 
-def _transform_mixes(key: dict) -> list[float]:
-    mix_x = float(key.get("mixX", 1.0))
-    mix_scale_x = float(key.get("mixScaleX", 1.0))
-    return [
-        float(key.get("mixRotate", 1.0)), mix_x, float(key.get("mixY", mix_x)),
-        mix_scale_x, float(key.get("mixScaleY", mix_scale_x)), float(key.get("mixShearY", 1.0)),
-    ]
+def _transform_mixes(version: str):
+    def read(key: dict) -> list[float]:
+        mix_x = float(key.get("mixX", 1.0))
+        mix_scale_x = float(key.get("mixScaleX", 1.0))
+        # 4.2 reads a missing mixScaleY as mixScaleX, 4.3 as 1.
+        scale_y_default = mix_scale_x if version == "4.2" else 1.0
+        return [
+            float(key.get("mixRotate", 1.0)), mix_x, float(key.get("mixY", mix_x)),
+            mix_scale_x, float(key.get("mixScaleY", scale_y_default)), float(key.get("mixShearY", 1.0)),
+        ]
+
+    return read
 
 
 def _path_mixes(key: dict) -> list[float]:
@@ -147,8 +155,9 @@ def _convert(keys, channels, path: str) -> list[dict]:
     return out
 
 
-def to_wire(timelines: dict) -> dict:
-    """Convert an animation written in the shorthand into Spine 4.2 JSON."""
+def to_wire(timelines: dict, version: str = "4.2") -> dict:
+    """Convert an animation written in the shorthand into Spine JSON of the
+    given format version."""
     if not isinstance(timelines, dict):
         raise AnimationError("an animation must be an object of timeline groups")
     anim = copy.deepcopy(timelines)
@@ -163,7 +172,7 @@ def to_wire(timelines: dict) -> dict:
     for name, keys in list((anim.get("ik") or {}).items()):
         anim["ik"][name] = _convert(keys, _IK, f"ik.{name}")
     for name, keys in list((anim.get("transform") or {}).items()):
-        anim["transform"][name] = _convert(keys, _transform_mixes, f"transform.{name}")
+        anim["transform"][name] = _convert(keys, _transform_mixes(version), f"transform.{name}")
     for name, tls in (anim.get("path") or {}).items():
         for tl, keys in list((tls or {}).items()):
             reader = _path_mixes if tl == "mix" else _value_channels(("value",), {})
@@ -171,7 +180,11 @@ def to_wire(timelines: dict) -> dict:
     for name, tls in (anim.get("physics") or {}).items():
         for tl, keys in list((tls or {}).items()):
             if tl != "reset":
-                tls[tl] = _convert(keys, _PHYSICS, f"physics.{name}.{tl}")
+                reader = _ONE if tl == "mix" and version != "4.2" else _PHYSICS
+                tls[tl] = _convert(keys, reader, f"physics.{name}.{tl}")
+    for name, tls in (anim.get("slider") or {}).items():
+        for tl, keys in list((tls or {}).items()):
+            tls[tl] = _convert(keys, _ONE, f"slider.{name}.{tl}")
     for skin, slots in (anim.get("attachments") or {}).items():
         for slot, atts in (slots or {}).items():
             for att, tls in (atts or {}).items():

@@ -1,4 +1,4 @@
-"""Serialize a SpineProject to a Spine 4.2 skeleton JSON file.
+"""Serialize a SpineProject to a Spine skeleton JSON file.
 
 The Spine editor's reader applies the same defaults documented in
 `schema.py`, and rejects redundant default-valued fields, so we dump with

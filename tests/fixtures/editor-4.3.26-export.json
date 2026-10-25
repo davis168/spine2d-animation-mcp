@@ -1,0 +1,718 @@
+{
+  "skeleton": {
+    "spine": "4.3.26",
+    "x": -105.0,
+    "width": 210.0,
+    "height": 490.0,
+    "images": "./images/"
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "hip",
+      "parent": "root",
+      "y": 228.33333333333331
+    },
+    {
+      "name": "torso",
+      "parent": "hip",
+      "y": 81.66666666666669
+    },
+    {
+      "name": "chest",
+      "parent": "torso",
+      "y": 30.0
+    },
+    {
+      "name": "neck",
+      "parent": "chest",
+      "y": 35.0
+    },
+    {
+      "name": "head",
+      "parent": "neck",
+      "y": 35.0
+    },
+    {
+      "name": "arm_left",
+      "parent": "chest",
+      "x": -80.0,
+      "y": 30.0
+    },
+    {
+      "name": "arm_right",
+      "parent": "chest",
+      "x": 80.0,
+      "y": 30.0
+    },
+    {
+      "name": "hand_left",
+      "parent": "arm_left",
+      "y": -100.0
+    },
+    {
+      "name": "hand_right",
+      "parent": "arm_right",
+      "y": -100.0
+    },
+    {
+      "name": "leg_left",
+      "parent": "hip",
+      "x": -27.5,
+      "y": -40.833333333333314
+    },
+    {
+      "name": "leg_right",
+      "parent": "hip",
+      "x": 27.5,
+      "y": -40.833333333333314
+    },
+    {
+      "name": "foot_left",
+      "parent": "leg_left",
+      "y": -135.0
+    },
+    {
+      "name": "foot_right",
+      "parent": "leg_right",
+      "y": -135.0
+    }
+  ],
+  "slots": [
+    {
+      "name": "head",
+      "bone": "head",
+      "attachment": "head"
+    },
+    {
+      "name": "mask",
+      "bone": "torso",
+      "attachment": "clip"
+    },
+    {
+      "name": "notch",
+      "bone": "torso",
+      "attachment": "clip"
+    },
+    {
+      "name": "torso",
+      "bone": "torso",
+      "attachment": "torso"
+    },
+    {
+      "name": "arms/arm_left",
+      "bone": "arm_left",
+      "attachment": "arm_left"
+    },
+    {
+      "name": "arms/arm_right",
+      "bone": "arm_right",
+      "attachment": "arm_right"
+    },
+    {
+      "name": "arms/hands/hand_left",
+      "bone": "hand_left",
+      "attachment": "hand_left"
+    },
+    {
+      "name": "arms/hands/hand_right",
+      "bone": "hand_right",
+      "attachment": "hand_right"
+    },
+    {
+      "name": "leg_left",
+      "bone": "leg_left",
+      "attachment": "leg_left"
+    },
+    {
+      "name": "leg_right",
+      "bone": "leg_right",
+      "attachment": "leg_right"
+    },
+    {
+      "name": "foot_left",
+      "bone": "foot_left",
+      "attachment": "foot_left"
+    },
+    {
+      "name": "foot_right",
+      "bone": "foot_right",
+      "attachment": "foot_right"
+    }
+  ],
+  "skins": [
+    {
+      "name": "default",
+      "attachments": {
+        "head": {
+          "head": {
+            "width": 80.0,
+            "height": 80.0,
+            "y": 40.0
+          }
+        },
+        "torso": {
+          "torso": {
+            "width": 100.0,
+            "height": 180.0
+          }
+        },
+        "arms/arm_left": {
+          "arm_left": {
+            "width": 40.0,
+            "height": 140.0,
+            "y": -50.0
+          }
+        },
+        "arms/arm_right": {
+          "arm_right": {
+            "width": 40.0,
+            "height": 140.0,
+            "y": -50.0
+          }
+        },
+        "arms/hands/hand_left": {
+          "hand_left": {
+            "width": 40.0,
+            "height": 40.0,
+            "x": -5.0,
+            "y": -40.0
+          }
+        },
+        "arms/hands/hand_right": {
+          "hand_right": {
+            "width": 40.0,
+            "height": 40.0,
+            "x": 5.0,
+            "y": -40.0
+          }
+        },
+        "leg_left": {
+          "leg_left": {
+            "width": 45.0,
+            "height": 180.0,
+            "y": -67.5
+          }
+        },
+        "leg_right": {
+          "leg_right": {
+            "width": 45.0,
+            "height": 180.0,
+            "y": -67.5
+          }
+        },
+        "foot_left": {
+          "foot_left": {
+            "width": 60.0,
+            "height": 30.0,
+            "x": 2.5,
+            "y": -37.5
+          }
+        },
+        "foot_right": {
+          "foot_right": {
+            "width": 60.0,
+            "height": 30.0,
+            "x": 7.5,
+            "y": -37.5
+          }
+        },
+        "mask": {
+          "clip": {
+            "type": "clipping",
+            "end": "torso",
+            "vertexCount": 4,
+            "vertices": [
+              -60.0,
+              0.0,
+              60.0,
+              0.0,
+              60.0,
+              150.0,
+              -60.0,
+              150.0
+            ],
+            "inverse": true
+          }
+        },
+        "notch": {
+          "clip": {
+            "type": "clipping",
+            "end": "torso",
+            "vertexCount": 4,
+            "vertices": [
+              0.0,
+              0.0,
+              40.0,
+              0.0,
+              10.0,
+              10.0,
+              0.0,
+              40.0
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "armor",
+      "attachments": {
+        "mask": {
+          "armor_clip": {
+            "type": "clipping",
+            "vertexCount": 3,
+            "vertices": [
+              -30.0,
+              0.0,
+              30.0,
+              0.0,
+              0.0,
+              60.0
+            ],
+            "convex": true,
+            "inverse": true
+          }
+        },
+        "notch": {
+          "plain_clip": {
+            "type": "clipping",
+            "vertexCount": 3,
+            "vertices": [
+              -30.0,
+              0.0,
+              30.0,
+              0.0,
+              0.0,
+              60.0
+            ],
+            "convex": true
+          }
+        }
+      }
+    }
+  ],
+  "events": {
+    "step": {
+      "audio": "step.wav",
+      "volume": 0.5,
+      "string": "left"
+    },
+    "hit": {
+      "int": 3
+    }
+  },
+  "animations": {
+    "idle": {
+      "bones": {
+        "torso": {
+          "translate": [
+            {
+              "time": 0.0,
+              "x": 0.0,
+              "y": 0.0,
+              "curve": [
+                0.3,
+                0.0,
+                0.7,
+                0.0,
+                0.3,
+                0.0,
+                0.7,
+                1.4819
+              ]
+            },
+            {
+              "time": 1.0,
+              "x": 0.0,
+              "y": 1.4819,
+              "curve": [
+                1.3,
+                0.0,
+                1.7,
+                0.0,
+                1.3,
+                1.4819,
+                1.7,
+                0.0
+              ]
+            },
+            {
+              "time": 2.0,
+              "x": 0.0,
+              "y": 0.0
+            }
+          ]
+        },
+        "chest": {
+          "rotate": [
+            {
+              "time": 0.0,
+              "value": 0.0,
+              "curve": [
+                0.3,
+                0.0,
+                0.7,
+                1.0
+              ]
+            },
+            {
+              "time": 1.0,
+              "value": 1.0,
+              "curve": [
+                1.3,
+                1.0,
+                1.7,
+                0.0
+              ]
+            },
+            {
+              "time": 2.0,
+              "value": 0.0
+            }
+          ]
+        },
+        "head": {
+          "rotate": [
+            {
+              "time": 0.0,
+              "value": 0.0,
+              "curve": [
+                0.345,
+                0.0,
+                0.805,
+                2.5
+              ]
+            },
+            {
+              "time": 1.15,
+              "value": 2.5,
+              "curve": [
+                1.405,
+                2.5,
+                1.745,
+                0.0
+              ]
+            },
+            {
+              "time": 2.0,
+              "value": 0.0
+            }
+          ]
+        },
+        "arm_left": {
+          "rotate": [
+            {
+              "time": 0.0,
+              "value": 0.0,
+              "curve": [
+                0.315,
+                0.0,
+                0.735,
+                -2.5
+              ]
+            },
+            {
+              "time": 1.05,
+              "value": -2.5,
+              "curve": [
+                1.335,
+                -2.5,
+                1.715,
+                0.0
+              ]
+            },
+            {
+              "time": 2.0,
+              "value": 0.0
+            }
+          ]
+        },
+        "arm_right": {
+          "rotate": [
+            {
+              "time": 0.0,
+              "value": 0.0,
+              "curve": [
+                0.375,
+                0.0,
+                0.875,
+                2.0
+              ]
+            },
+            {
+              "time": 1.25,
+              "value": 2.0,
+              "curve": [
+                1.475,
+                2.0,
+                1.775,
+                0.0
+              ]
+            },
+            {
+              "time": 2.0,
+              "value": 0.0
+            }
+          ]
+        },
+        "hand_left": {
+          "rotate": [
+            {
+              "time": 0.0,
+              "value": 0.0,
+              "curve": [
+                0.345,
+                0.0,
+                0.805,
+                -4.0
+              ]
+            },
+            {
+              "time": 1.15,
+              "value": -4.0,
+              "curve": [
+                1.405,
+                -4.0,
+                1.745,
+                0.0
+              ]
+            },
+            {
+              "time": 2.0,
+              "value": 0.0
+            }
+          ]
+        },
+        "hand_right": {
+          "rotate": [
+            {
+              "time": 0.0,
+              "value": 0.0,
+              "curve": [
+                0.405,
+                0.0,
+                0.945,
+                3.0
+              ]
+            },
+            {
+              "time": 1.35,
+              "value": 3.0,
+              "curve": [
+                1.545,
+                3.0,
+                1.805,
+                0.0
+              ]
+            },
+            {
+              "time": 2.0,
+              "value": 0.0
+            }
+          ]
+        }
+      }
+    },
+    "swap": {
+      "events": [
+        {
+          "time": 0.1,
+          "name": "step",
+          "string": "right"
+        },
+        {
+          "time": 0.4,
+          "name": "hit"
+        },
+        {
+          "time": 0.6,
+          "name": "step"
+        }
+      ],
+      "drawOrderFolder": [
+        {
+          "slots": [
+            "arms/hands/hand_left",
+            "arms/hands/hand_right"
+          ],
+          "keys": [
+            {
+              "time": 0.5,
+              "offsets": [
+                {
+                  "slot": "arms/hands/hand_left",
+                  "offset": 1
+                },
+                {
+                  "slot": "arms/hands/hand_right",
+                  "offset": -1
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "mixed": {
+      "events": [
+        {
+          "time": 0.1,
+          "name": "step",
+          "string": "right"
+        }
+      ],
+      "drawOrderFolder": [
+        {
+          "slots": [
+            "arms/arm_left",
+            "arms/arm_right",
+            "arms/hands/hand_left",
+            "arms/hands/hand_right"
+          ],
+          "keys": [
+            {
+              "time": 0.2,
+              "offsets": [
+                {
+                  "slot": "arms/arm_left",
+                  "offset": 3
+                },
+                {
+                  "slot": "arms/arm_right",
+                  "offset": 1
+                },
+                {
+                  "slot": "arms/hands/hand_left",
+                  "offset": -1
+                },
+                {
+                  "slot": "arms/hands/hand_right",
+                  "offset": -3
+                }
+              ]
+            },
+            {
+              "time": 0.8
+            }
+          ]
+        },
+        {
+          "slots": [
+            "arms/hands/hand_left",
+            "arms/hands/hand_right"
+          ],
+          "keys": [
+            {
+              "time": 0.3,
+              "offsets": [
+                {
+                  "slot": "arms/hands/hand_left",
+                  "offset": 1
+                },
+                {
+                  "slot": "arms/hands/hand_right",
+                  "offset": -1
+                }
+              ]
+            },
+            {
+              "time": 0.9
+            }
+          ]
+        }
+      ],
+      "drawOrder": [
+        {
+          "time": 0.5,
+          "offsets": [
+            {
+              "slot": "head",
+              "offset": 11
+            },
+            {
+              "slot": "mask",
+              "offset": 9
+            },
+            {
+              "slot": "notch",
+              "offset": 7
+            },
+            {
+              "slot": "torso",
+              "offset": 5
+            },
+            {
+              "slot": "arms/arm_left",
+              "offset": 3
+            },
+            {
+              "slot": "arms/arm_right",
+              "offset": 1
+            },
+            {
+              "slot": "arms/hands/hand_left",
+              "offset": -1
+            },
+            {
+              "slot": "arms/hands/hand_right",
+              "offset": -3
+            },
+            {
+              "slot": "leg_left",
+              "offset": -5
+            },
+            {
+              "slot": "leg_right",
+              "offset": -7
+            },
+            {
+              "slot": "foot_left",
+              "offset": -9
+            },
+            {
+              "slot": "foot_right",
+              "offset": -11
+            }
+          ]
+        }
+      ]
+    },
+    "top_only": {
+      "drawOrderFolder": [
+        {
+          "slots": [
+            "arms/arm_left",
+            "arms/arm_right",
+            "arms/hands/hand_left",
+            "arms/hands/hand_right"
+          ],
+          "keys": [
+            {
+              "time": 0.25,
+              "offsets": [
+                {
+                  "slot": "arms/arm_left",
+                  "offset": 3
+                },
+                {
+                  "slot": "arms/arm_right",
+                  "offset": 1
+                },
+                {
+                  "slot": "arms/hands/hand_left",
+                  "offset": -1
+                },
+                {
+                  "slot": "arms/hands/hand_right",
+                  "offset": -3
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

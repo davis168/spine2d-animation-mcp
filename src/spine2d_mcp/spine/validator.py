@@ -1,7 +1,7 @@
 """Structural validation of a SpineProject.
 
-Level-1 validation: pure-Python checks of the invariants the Spine 4.2 reader
-(`reference/SkeletonJson.java`) enforces while parsing. Catching them here makes
+Level-1 validation: pure-Python checks of the invariants the Spine 4.x readers
+(`reference/SkeletonJson-4.2.java`, `-4.3.java`) enforce while parsing. Catching them here makes
 format regressions reproducible in tests instead of only surfacing as a failed
 manual import in the Spine editor.
 
@@ -15,7 +15,7 @@ from .schema import SpineProject
 
 
 class SpineValidationError(ValueError):
-    """Raised when a SpineProject violates a Spine 4.2 structural invariant."""
+    """Raised when a SpineProject violates a Spine structural invariant."""
 
 
 def validate(project: SpineProject) -> None:

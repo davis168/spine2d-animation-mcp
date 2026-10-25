@@ -5,6 +5,7 @@ before editing it (names, hierarchy, setup positions, what each animation keys).
 from __future__ import annotations
 
 from . import document as d
+from . import versions
 from .check import summary
 
 
@@ -24,6 +25,9 @@ def inspect(doc: dict) -> dict:
                 entry[key] = _r(b[key])
         if b.get("inherit", "normal") != "normal":
             entry["inherit"] = b["inherit"]
+        for key in ("skin", "icon", "iconSize", "iconRotation", "visible"):
+            if key in b:
+                entry[key] = b[key]
         entry["world"] = [_r(w.x), _r(w.y)]
         bones.append(entry)
 
@@ -42,20 +46,41 @@ def inspect(doc: dict) -> dict:
             atts[slot] = {}
             for name, att in (named or {}).items():
                 info = {"type": att.get("type", "region")}
-                for key in ("path", "width", "height", "x", "y", "rotation", "parent", "end"):
+                for key in ("path", "width", "height", "x", "y", "rotation", "parent", "source", "skin", "slot",
+                            "timelines", "end", "convex", "inverse", "closed", "constantSpeed", "sequence"):
                     if key in att:
-                        info[key] = _r(att[key]) if isinstance(att[key], (int, float)) else att[key]
-                if "uvs" in att:
-                    info["vertices"] = len(att["uvs"]) // 2
-                    info["weighted"] = len(att.get("vertices") or []) != len(att["uvs"])
+                        number = isinstance(att[key], (int, float)) and not isinstance(att[key], bool)
+                        info[key] = _r(att[key]) if number else att[key]
+                count = len(att["uvs"]) // 2 if "uvs" in att else att.get("vertexCount")
+                if isinstance(count, int):
+                    info["vertices"] = count
+                    info["weighted"] = len(att.get("vertices") or []) != 2 * count
                 atts[slot][name] = info
-        skins.append({"name": skin.get("name"), "attachments": atts})
+        entry = {"name": skin.get("name"), "attachments": atts}
+        for key in ("bones", *d.CONSTRAINT_KINDS):
+            if skin.get(key):
+                entry[key] = skin[key]
+        skins.append(entry)
 
+    # In apply order; `target` is the bone an IK or transform constraint
+    # follows, whatever the version calls it (4.3 transform: `source`).
     constraints = {}
-    for kind, c in d.all_constraints(doc):
-        info = {k: c[k] for k in ("name", "order", "bones", "bone", "target") if k in c}
+    for applies, (kind, c) in enumerate(d.apply_order(doc)):
+        info = {"name": c.get("name"), "applies": applies}
+        for k in ("order", "bones", "bone", "animation", "property", "scaleY", "uniform", "local", "relative",
+                  "localSource", "localTarget", "additive", "skin"):
+            if k in c:
+                info[k] = c[k]
+        key = d.target_bone_key(doc, kind)
+        if key:
+            info["target"] = c.get(key)
+        if kind == "path":
+            info["slot"] = c.get(d.path_slot_key(doc))
+        if isinstance(c.get("properties"), dict):
+            info["properties"] = {src: sorted((spec or {}).get("to") or {}) for src, spec in c["properties"].items()}
         constraints.setdefault(kind, []).append(info)
 
+    names = [s["name"] for s in d.slots(doc)]
     animations = []
     for name, anim in (doc.get("animations") or {}).items():
         anim = anim or {}
@@ -72,13 +97,19 @@ def inspect(doc: dict) -> dict:
             "timelines": timelines,
             "events": len(anim.get("events") or []),
             "draw_order_keys": len(anim.get("drawOrder") or []),
+            **({"folder_keys": [d.folder_of(names, (e or {}).get("slots")) or (e or {}).get("slots")
+                                       for e in anim["drawOrderFolder"]]}
+               if isinstance(anim.get("drawOrderFolder"), list) else {}),
         })
 
+    folders = d.draw_order_folders(names)
     return {
         "summary": summary(doc),
+        "format_version": versions.of(doc),
         "skeleton": doc.get("skeleton") or {},
         "bones": bones,
         "slots": slots,
+        **({"draw_order_folders": folders} if folders else {}),
         "skins": skins,
         "constraints": constraints,
         "events": sorted(doc.get("events") or {}),

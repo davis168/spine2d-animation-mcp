@@ -24,10 +24,10 @@ def test_validate_reports_ok_and_errors(imported, tmp_path):
     ok = server.validate_skeleton(str(imported.project_path))
     assert ok["ok"] and ok["errors"] == [] and ok["summary"].startswith("spine 4.2")
     doc = d.load(imported.project_path)
-    doc["skeleton"]["spine"] = "4.3.26"
+    doc["skeleton"]["spine"] = "4.1.24"
     bad = d.save(doc, tmp_path / "bad.json")
     result = server.validate_skeleton(str(bad))
-    assert not result["ok"] and "targets Spine 4.2" in result["errors"][0]
+    assert not result["ok"] and "unsupported format version 4.1.24" in result["errors"][0]
 
 
 def test_edit_refuses_changes_that_add_errors(imported):
@@ -41,8 +41,8 @@ def test_edit_refuses_changes_that_add_errors(imported):
 def test_edit_allows_fixes_on_files_with_old_errors(imported):
     path = str(imported.project_path)
     doc = d.load(path)
-    doc["skeleton"]["spine"] = "4.3.26"  # a pre-existing error
+    doc["slots"][1]["attachment"] = "ghost"  # a pre-existing error
     d.save(doc, path)
     result = edit_skeleton(path, lambda doc: doc["slots"][0].update(color="ff0000ff"))
-    assert any("targets Spine 4.2" in e for e in result["errors"])
+    assert any("renders nothing" in e for e in result["errors"])
     assert json.loads(imported.project_path.read_text())["slots"][0]["color"] == "ff0000ff"

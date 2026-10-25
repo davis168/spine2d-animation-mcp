@@ -22,13 +22,13 @@ def _has(doc, text, level="error", loops=None):
 
 def test_imported_skeleton_is_clean(doc):
     assert _findings(doc) == []
-    assert summary(doc).startswith("spine 4.2 | 14 bones, 10 slots")
+    assert summary(doc).startswith("spine 4.2.") and "| 14 bones, 10 slots" in summary(doc)
 
 
 @pytest.mark.parametrize(
     "mutate, text",
     [
-        (lambda doc: doc["skeleton"].update(spine="4.3.26"), "targets Spine 4.2"),
+        (lambda doc: doc["skeleton"].update(spine="4.1.24"), "unsupported format version 4.1.24"),
         (lambda doc: doc.update(constraints=[]), "4.3 constraints array"),
         (lambda doc: doc["bones"].insert(1, doc["bones"].pop(2)), "not a bone declared before it"),
         (lambda doc: doc["bones"][1].update(transform="noScale"), "4.1 key"),

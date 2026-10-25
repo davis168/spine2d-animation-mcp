@@ -1,9 +1,16 @@
-"""Spine 4.2 skeleton JSON as a plain dict: load, save, look up, measure.
+"""Spine skeleton JSON (format 4.2 or 4.3) as a plain dict: load, save, look
+up, measure.
 
 The editing tools work on the raw document rather than the Pydantic models in
 `schema.py`, so a skeleton exported by the Spine editor keeps every field this
 package does not model (meshes, paths, sequences, nonessential data) through a
 round trip. `schema.py` stays the strict model the PSD importer builds with.
+
+The two format versions lay constraints out differently: 4.2 has one
+top-level array per type (`ik`, `transform`, `path`, `physics`), each entry
+with an `order`; 4.3 has one `constraints` array whose entries carry a `type`
+and apply in array order. The helpers below read either layout (chosen by
+`versions.layout`), so callers name constraint kinds, not arrays.
 """
 
 from __future__ import annotations
@@ -15,11 +22,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-# Spine runtimes load only data from their own major.minor line; this project
-# ships to spine-phaser-v4 on the 4.2 line.
-TARGET_VERSION = "4.2"
+from . import versions
 
-CONSTRAINT_KINDS = ("ik", "transform", "path", "physics")
+# Every constraint kind any supported format version has.
+CONSTRAINT_KINDS = ("ik", "transform", "path", "physics", "slider")
 
 
 def load(path: str | Path) -> dict:
@@ -86,12 +92,80 @@ def attachment_names(doc: dict, slot: str) -> set[str]:
     return names
 
 
-def constraints(doc: dict, kind: str) -> list[dict]:
-    return _dicts(doc.get(kind))
+def kinds(doc: dict) -> tuple[str, ...]:
+    """The constraint kinds the document's format version has."""
+    return versions.FORMATS[versions.layout(doc)].constraint_kinds
 
 
 def all_constraints(doc: dict) -> list[tuple[str, dict]]:
-    return [(kind, c) for kind in CONSTRAINT_KINDS for c in constraints(doc, kind)]
+    """(kind, entry) for every constraint: 4.2 in type-array order, 4.3 in
+    array (apply) order. See `apply_order` for 4.2's apply order."""
+    if versions.layout(doc) == "4.2":
+        return [(kind, c) for kind in kinds(doc) for c in _dicts(doc.get(kind))]
+    return [(c.get("type"), c) for c in _dicts(doc.get("constraints"))]
+
+
+def constraints(doc: dict, kind: str) -> list[dict]:
+    return [c for k, c in all_constraints(doc) if k == kind]
+
+
+def apply_order(doc: dict) -> list[tuple[str, dict]]:
+    """Constraints in the order the runtime applies them. 4.3 applies the
+    array in order. 4.2's Skeleton.updateCache, for each i from 0 to n-1
+    (n constraints), applies the first constraint (ik, then transform, path,
+    physics, each in array order) whose `order` is i; any other constraint
+    never runs (see `never_applied`), and is listed last here."""
+    entries = all_constraints(doc)
+    if versions.layout(doc) != "4.2":
+        return entries
+    applied = _applied_42(entries)
+    return [entries[j] for j in applied] + [e for j, e in enumerate(entries) if j not in applied]
+
+
+def _applied_42(entries: list[tuple[str, dict]]) -> list[int]:
+    """Indexes of the constraints 4.2 applies, in apply order."""
+    applied = []
+    for i in range(len(entries)):
+        first = next((j for j, (_, c) in enumerate(entries) if c.get("order", 0) == i), None)
+        if first is not None:
+            applied.append(first)
+    return applied
+
+
+def never_applied(doc: dict) -> list[str]:
+    """4.2 constraints the runtime never runs: an `order` outside 0..n-1, or
+    one an earlier constraint in the ik/transform/path/physics lists has."""
+    if versions.layout(doc) != "4.2":
+        return []
+    entries = all_constraints(doc)
+    applied = set(_applied_42(entries))
+    return [c.get("name") for j, (_, c) in enumerate(entries) if j not in applied]
+
+
+def renumber(doc: dict, ordered: list[tuple[str, dict]]) -> None:
+    """Give 4.2 constraints the orders 0..n-1 in the given apply order."""
+    for i, (_, c) in enumerate(ordered):
+        c["order"] = i
+
+
+def target_bone_key(doc: dict, kind: str) -> str | None:
+    """The field naming the bone an IK or transform constraint follows: IK
+    `target`; transform `target` in 4.2, `source` in 4.3."""
+    if kind == "ik":
+        return "target"
+    if kind == "transform":
+        return "target" if versions.layout(doc) == "4.2" else "source"
+    return None
+
+
+def path_slot_key(doc: dict) -> str:
+    """The field naming a path constraint's slot: `target` in 4.2, `slot` in 4.3."""
+    return "target" if versions.layout(doc) == "4.2" else "slot"
+
+
+def linked_mesh_key(doc: dict) -> str:
+    """The field naming a linked mesh's source mesh: `parent` in 4.2, `source` in 4.3."""
+    return "parent" if versions.layout(doc) == "4.2" else "source"
 
 
 def animation_duration(animation: dict) -> float:
@@ -110,8 +184,8 @@ def animation_duration(animation: dict) -> float:
     def values(obj) -> list:
         return list(obj.values()) if isinstance(obj, dict) else []
 
-    # bones/slots/path/physics: name -> {timeline: keys}; ik/transform: name -> keys.
-    for group in ("bones", "slots", "path", "physics"):
+    # bones/slots/path/physics/slider: name -> {timeline: keys}; ik/transform: name -> keys.
+    for group in ("bones", "slots", "path", "physics", "slider"):
         for timelines in values(animation.get(group)):
             for keys in values(timelines):
                 keys_time(keys)
@@ -124,8 +198,76 @@ def animation_duration(animation: dict) -> float:
                 for keys in values(att):
                     keys_time(keys)
     keys_time(animation.get("drawOrder"))
+    folders = animation.get("drawOrderFolder")  # 4.3: [{slots, keys}]
+    for folder in folders if isinstance(folders, list) else []:
+        keys_time(folder.get("keys") if isinstance(folder, dict) else None)
     keys_time(animation.get("events"))
     return latest
+
+
+# The editor keeps draw order folders in slot names: a slot named "face/eyes/left"
+# is in folder "face" and its subfolder "face/eyes". A folder's slots sit next
+# to each other in the draw order; a 4.3 draw order folder timeline keys all
+# of them (subfolders included).
+
+def draw_order_folders(names: list[str]) -> dict[str, list[str]]:
+    """Every draw order folder, outer folders first, with its slots in the order given."""
+    folders: dict[str, list[str]] = {}
+    for name in names:
+        parts = name.split("/")
+        for depth in range(1, len(parts)):
+            folders.setdefault("/".join(parts[:depth]), []).append(name)
+    return folders
+
+
+def folder_of(names: list[str], slots) -> str | None:
+    """The folder holding exactly `slots` (the outermost, if nested folders hold the same ones)."""
+    if not isinstance(slots, list) or not all(isinstance(s, str) for s in slots):
+        return None
+    wanted = set(slots)
+    return next((f for f, held in draw_order_folders(names).items() if set(held) == wanted), None)
+
+
+def offsets_for(base: list[str], order: list[str]) -> list[dict]:
+    """The draw order key offsets that turn `base` (setup order) into `order`
+    (the same names, reordered)."""
+    position = {name: i for i, name in enumerate(order)}
+    return [{"slot": name, "offset": position[name] - i} for i, name in enumerate(base) if position[name] != i]
+
+
+def order_from(base: list[str], offsets: list[dict]) -> list[str]:
+    """The order a draw order key's offsets give, as the reader computes it."""
+    index = {name: i for i, name in enumerate(base)}
+    order: list[str | None] = [None] * len(base)
+    unchanged, original = [], 0
+    for o in offsets:
+        while original != index[o["slot"]]:
+            unchanged.append(base[original])
+            original += 1
+        order[original + o.get("offset", 0)] = base[original]
+        original += 1
+    unchanged += base[original:]
+    for i in range(len(order) - 1, -1, -1):
+        if order[i] is None:
+            order[i] = unchanged.pop()
+    return order
+
+
+def split_folders(names: list[str]) -> list[str]:
+    """Folders whose slots are not next to each other in `names`."""
+    index = {name: i for i, name in enumerate(names)}
+    return [f for f, held in draw_order_folders(names).items() if index[held[-1]] - index[held[0]] + 1 != len(held)]
+
+
+def is_convex(points: list[tuple[float, float]]) -> bool:
+    """Whether a polygon turns the same way at every corner."""
+    turns = set()
+    for i in range(len(points)):
+        (ax, ay), (bx, by), (cx, cy) = points[i - 2], points[i - 1], points[i]
+        cross = (bx - ax) * (cy - by) - (by - ay) * (cx - bx)
+        if abs(cross) > 1e-9:
+            turns.add(cross > 0)
+    return len(turns) <= 1
 
 
 @dataclass(frozen=True)

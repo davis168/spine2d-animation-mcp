@@ -57,12 +57,49 @@ def synthetic_psd(tmp_path):
     return _save_psd(tmp_path, parts)
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_versions(monkeypatch):
+    """Tests decide format versions themselves, not the developer's environment."""
+    monkeypatch.delenv("SPINE_FORMAT_VERSION", raising=False)
+    monkeypatch.delenv("SPINE_EDITOR_VERSION", raising=False)
+
+
 @pytest.fixture
 def imported(synthetic_psd, tmp_path):
-    """The synthetic character run through the PSD importer (ImportResult)."""
+    """The synthetic character run through the PSD importer as a 4.2 skeleton (ImportResult)."""
     from spine2d_mcp.pipeline import import_psd_to_spine
 
-    return import_psd_to_spine(synthetic_psd, str(tmp_path / "out"))
+    return import_psd_to_spine(synthetic_psd, str(tmp_path / "out"), format_version="4.2")
+
+
+@pytest.fixture
+def imported43(synthetic_psd, tmp_path):
+    """The synthetic character as a 4.3 skeleton (ImportResult)."""
+    from spine2d_mcp.pipeline import import_psd_to_spine
+
+    return import_psd_to_spine(synthetic_psd, str(tmp_path / "out43"), format_version="4.3")
+
+
+@pytest.fixture
+def game(tmp_path):
+    """Factory for a game project folder (a git repository, so the version
+    search stops there): game(package={...}, installed={...}, declared="4.3")."""
+    import json
+
+    def _make(name="game", package=None, installed=None, declared=None):
+        root = tmp_path / name
+        (root / ".git").mkdir(parents=True, exist_ok=True)
+        if package is not None:
+            (root / "package.json").write_text(json.dumps({"dependencies": package}))
+        for pkg, version in (installed or {}).items():
+            folder = root / "node_modules" / pkg
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "package.json").write_text(json.dumps({"name": pkg, "version": version}))
+        if declared is not None:
+            (root / ".spine-version").write_text(declared + "\n")
+        return root
+
+    return _make
 
 
 @pytest.fixture

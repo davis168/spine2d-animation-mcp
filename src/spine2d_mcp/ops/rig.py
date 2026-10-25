@@ -1,4 +1,5 @@
-"""Edit a rig's setup pose: bones, pivots, slots and draw order.
+"""Edit a rig's setup pose: bones, pivots, slots, draw order and event
+definitions.
 
 Each operation is a dict with an "op" key, applied in order (see `edit_rig`).
 Operations that would move art keep it in place where the docstring says so:
@@ -11,11 +12,18 @@ from __future__ import annotations
 
 from ..edits import EditError
 from ..spine import document as d
+from ..spine import versions
+from .animation import keep_draw_order_keys
 
-_BONE_FIELDS = ("x", "y", "rotation", "scaleX", "scaleY", "shearX", "shearY", "length", "inherit", "color")
+# icon, iconSize, iconRotation and visible are how the editor shows a bone
+# (nonessential data); iconSize and iconRotation are 4.3 only.
+_BONE_FIELDS = ("x", "y", "rotation", "scaleX", "scaleY", "shearX", "shearY", "length", "inherit", "color",
+                "icon", "iconSize", "iconRotation", "visible")
 _BONE_DEFAULTS = {"x": 0, "y": 0, "rotation": 0, "scaleX": 1, "scaleY": 1, "shearX": 0, "shearY": 0,
-                  "length": 0, "inherit": "normal"}
-_SLOT_FIELDS = ("attachment", "color", "dark", "blend")
+                  "length": 0, "inherit": "normal", "iconSize": 1, "iconRotation": 0, "visible": True}
+_ONLY_43 = ("iconSize", "iconRotation")
+_SLOT_FIELDS = ("attachment", "color", "dark", "blend", "visible")
+_SLOT_DEFAULTS = {"blend": "normal", "visible": True}
 _VERTEX_TYPES = ("mesh", "boundingbox", "clipping", "path")
 
 
@@ -33,7 +41,11 @@ def _slot(doc: dict, name: str) -> dict:
     return slot
 
 
-def _set_fields(target: dict, fields: dict, allowed, defaults) -> None:
+def _set_fields(target: dict, fields: dict, allowed, defaults, doc: dict | None = None) -> None:
+    if doc is not None and versions.layout(doc) == "4.2":
+        for key in _ONLY_43:
+            if fields.get(key, _BONE_DEFAULTS[key]) != _BONE_DEFAULTS[key]:
+                raise EditError(f"{key} needs format version 4.3; this skeleton is 4.2")
     for key, value in fields.items():
         if key not in allowed:
             raise EditError(f"cannot set {key!r} (settable: {', '.join(allowed)})")
@@ -43,7 +55,7 @@ def _set_fields(target: dict, fields: dict, allowed, defaults) -> None:
             target[key] = value
 
 
-def _require_normal_chain(doc: dict, name: str) -> None:
+def require_normal_chain(doc: dict, name: str) -> None:
     _bone(doc, name)
     by_name = d.bone_map(doc)
     for b in [name, *d.ancestors(doc, name)]:
@@ -83,7 +95,7 @@ def _is_weighted(att: dict) -> bool:
     return isinstance(count, int) and len(att.get("vertices") or []) != count * 2
 
 
-def _weighted_influences(att: dict):
+def weighted_influences(att: dict):
     """Yield the index into `vertices` of each influence's bone index."""
     vertices, i = att["vertices"], 0
     while i < len(vertices):
@@ -101,7 +113,7 @@ def _reorder_bones(doc: dict, order: list[str]) -> None:
     remap = {i: new_index[name] for i, name in enumerate(old) if name in new_index}
     for _, att in _vertex_attachments(doc):
         if att.get("type") in _VERTEX_TYPES and "vertices" in att and _is_weighted(att):
-            for k in _weighted_influences(att):
+            for k in weighted_influences(att):
                 index = int(att["vertices"][k])
                 if index not in remap:
                     raise EditError(f"a weighted mesh uses bone {old[index]!r}, which this change removes")
@@ -129,11 +141,11 @@ def add_bone(doc: dict, name: str, parent: str, world: bool = False, **fields) -
     _bone(doc, parent)
     bone = {"name": name, "parent": parent}
     if world:
-        _require_normal_chain(doc, parent)
+        require_normal_chain(doc, parent)
         wx, wy = fields.pop("x", 0.0), fields.pop("y", 0.0)
         p = d.world_transforms(doc)[parent]
         fields["x"], fields["y"] = (round(v, 4) for v in p.inverse_vector(wx - p.x, wy - p.y))
-    _set_fields(bone, fields, _BONE_FIELDS, _BONE_DEFAULTS)
+    _set_fields(bone, fields, _BONE_FIELDS, _BONE_DEFAULTS, doc)
     # Insert after the parent's subtree, so the list still reads as a hierarchy.
     order = [b["name"] for b in d.bones(doc)]
     subtree = [parent, *_descendants(doc, parent)]
@@ -148,7 +160,7 @@ def set_bone(doc: dict, name: str, parent: str | None = None, **fields) -> dict:
     bone = _bone(doc, name)
     if parent is not None and parent != bone.get("parent"):
         _reparent(doc, name, parent)
-    _set_fields(bone, fields, _BONE_FIELDS, _BONE_DEFAULTS)
+    _set_fields(bone, fields, _BONE_FIELDS, _BONE_DEFAULTS, doc)
     return {"op": "set_bone", "bone": name, **({"parent": parent} if parent else {}), **fields}
 
 
@@ -159,8 +171,8 @@ def _reparent(doc: dict, name: str, parent: str) -> None:
     _bone(doc, parent)
     if parent == name or parent in _descendants(doc, name):
         raise EditError(f"cannot parent {name!r} to its own descendant {parent!r}")
-    _require_normal_chain(doc, name)
-    _require_normal_chain(doc, parent)
+    require_normal_chain(doc, name)
+    require_normal_chain(doc, parent)
     world = d.world_transforms(doc)
     me, new_parent = world[name], world[parent]
     bone = _bone(doc, name)
@@ -180,7 +192,7 @@ def move_pivot(doc: dict, name: str, x: float = 0.0, y: float = 0.0, to: list[fl
     """Move a bone's pivot by a world-space delta (x, y), or to world point
     `to`, without moving its art: children, attachments on its slots and
     weighted influences are shifted back by the same amount."""
-    _require_normal_chain(doc, name)
+    require_normal_chain(doc, name)
     world = d.world_transforms(doc)
     me = world[name]
     dx, dy = (to[0] - me.x, to[1] - me.y) if to is not None else (x, y)
@@ -203,7 +215,7 @@ def move_pivot(doc: dict, name: str, x: float = 0.0, y: float = 0.0, to: list[fl
             att["y"] = round(att.get("y", 0) - by, 4)
         elif kind in _VERTEX_TYPES and "vertices" in att:
             if _is_weighted(att):
-                for k in _weighted_influences(att):
+                for k in weighted_influences(att):
                     if int(att["vertices"][k]) == bone_index:
                         att["vertices"][k + 1] = round(att["vertices"][k + 1] - bx, 4)
                         att["vertices"][k + 2] = round(att["vertices"][k + 2] - by, 4)
@@ -228,10 +240,11 @@ def rename_bone(doc: dict, name: str, to: str) -> dict:
         if s.get("bone") == name:
             s["bone"] = to
     for kind, c in d.all_constraints(doc):
-        if c.get("bone") == name:
+        if c.get("bone") == name:  # physics, slider
             c["bone"] = to
-        if kind != "path" and c.get("target") == name:  # a path constraint targets a slot
-            c["target"] = to
+        key = d.target_bone_key(doc, kind)  # a path constraint follows a slot, not a bone
+        if key and c.get(key) == name:
+            c[key] = to
         if "bones" in c:
             c["bones"] = [to if b == name else b for b in c["bones"]]
     for skin in d.skins(doc):
@@ -252,7 +265,7 @@ def remove_bone(doc: dict, name: str) -> dict:
     users += [f"slot {s['name']}" for s in d.slots(doc) if s.get("bone") == name]
     users += [f"{k} {c['name']}" for k, c in d.all_constraints(doc)
               if c.get("bone") == name or name in (c.get("bones") or [])
-              or (k != "path" and c.get("target") == name)]
+              or (d.target_bone_key(doc, k) and c.get(d.target_bone_key(doc, k)) == name)]
     if users:
         raise EditError(f"bone {name!r} is used by {', '.join(users)}")
     _reorder_bones(doc, [b["name"] for b in d.bones(doc) if b["name"] != name])
@@ -264,23 +277,59 @@ def remove_bone(doc: dict, name: str) -> dict:
     return {"op": "remove_bone", "bone": name}
 
 
-def add_slot(doc: dict, name: str, bone: str, attachment: str | None = None, index: int | None = None, **fields) -> dict:
+def _slot_names(doc: dict) -> list[str]:
+    return [s["name"] for s in d.slots(doc)]
+
+
+def _check_slot_name(doc: dict, name) -> None:
+    if not isinstance(name, str) or not name or any(not part for part in name.split("/")):
+        raise EditError(f"bad slot name {name!r} (a '/' puts it in a draw order folder: folder/name)")
     if name in d.slot_map(doc):
         raise EditError(f"slot {name!r} already exists")
+    names = _slot_names(doc)
+    if name in d.draw_order_folders(names):
+        raise EditError(f"{name!r} is a draw order folder's name; a slot cannot share it")
+    parts = name.split("/")
+    clash = next(("/".join(parts[:i]) for i in range(1, len(parts)) if "/".join(parts[:i]) in names), None)
+    if clash:
+        raise EditError(f"slot {clash!r} has the name the folder {clash!r} would need; rename it first")
+
+
+def _keep_folders_together(before: list[str], after: list[str]) -> None:
+    """The editor pulls a folder's slots together when it imports JSON, which
+    changes the draw order; refuse a change that splits a folder."""
+    split = [f for f in d.split_folders(after) if f not in d.split_folders(before)]
+    if split:
+        held = d.draw_order_folders(after)[split[0]]
+        raise EditError(f"draw order folder {split[0]!r} ({', '.join(held)}) would no longer be together in the draw "
+                        "order; keep a folder's slots next to each other (rename_slot moves a slot in or out "
+                        "of a folder)")
+
+
+def _kept_keys(doc: dict, before: list[str], renamed: dict | None = None, folders_renamed: dict | None = None) -> dict:
+    notes = keep_draw_order_keys(doc, before, renamed, folders_renamed)
+    return {"notes": notes} if notes else {}
+
+
+def add_slot(doc: dict, name: str, bone: str, attachment: str | None = None, index: int | None = None, **fields) -> dict:
+    _check_slot_name(doc, name)
     _bone(doc, bone)
+    before = _slot_names(doc)
     slot = {"name": name, "bone": bone}
-    _set_fields(slot, {"attachment": attachment, **fields}, _SLOT_FIELDS, {"blend": "normal"})
+    _set_fields(slot, {"attachment": attachment, **fields}, _SLOT_FIELDS, _SLOT_DEFAULTS)
+    at = len(before) if index is None else index
+    _keep_folders_together(before, before[:at] + [name] + before[at:])
     slots = doc.setdefault("slots", [])
-    slots.insert(len(slots) if index is None else index, slot)
+    slots.insert(at, slot)
     return {"op": "add_slot", "slot": name, "bone": bone, "draw_index": slots.index(slot),
-            **_draw_order_note(doc)}
+            **_kept_keys(doc, before)}
 
 
 def set_slot(doc: dict, name: str, bone: str | None = None, **fields) -> dict:
     slot = _slot(doc, name)
     if bone is not None and bone != slot.get("bone"):
         _rebind_slot(doc, name, bone)
-    _set_fields(slot, fields, _SLOT_FIELDS, {"blend": "normal"})
+    _set_fields(slot, fields, _SLOT_FIELDS, _SLOT_DEFAULTS)
     return {"op": "set_slot", "slot": name, **({"bone": bone} if bone else {}), **fields}
 
 
@@ -290,8 +339,8 @@ def _rebind_slot(doc: dict, name: str, bone: str) -> None:
     scaled bones too)."""
     slot = _slot(doc, name)
     _bone(doc, bone)
-    _require_normal_chain(doc, slot["bone"])
-    _require_normal_chain(doc, bone)
+    require_normal_chain(doc, slot["bone"])
+    require_normal_chain(doc, bone)
     world = d.world_transforms(doc)
     old, new = world[slot["bone"]], world[bone]
     to_new = d.mat_mul(d.mat_inv(d.matrix(new)), d.matrix(old))
@@ -320,14 +369,18 @@ def _rebind_slot(doc: dict, name: str, bone: str) -> None:
 
 def remove_slot(doc: dict, name: str) -> dict:
     _slot(doc, name)
-    users = [f"path constraint {c['name']}" for c in d.constraints(doc, "path") if c.get("target") == name]
+    slot_key = d.path_slot_key(doc)
+    users = [f"path constraint {c['name']}" for c in d.constraints(doc, "path") if c.get(slot_key) == name]
     users += [f"clipping {skin.get('name')}/{slot}/{att_name}"
               for skin in d.skins(doc) for slot, atts in (skin.get("attachments") or {}).items()
               for att_name, att in (atts or {}).items() if (att or {}).get("end") == name]
-    users += [f"drawOrder keys of {anim_name}" for anim_name, anim in (doc.get("animations") or {}).items()
-              if any(o.get("slot") == name for k in (anim or {}).get("drawOrder") or [] for o in k.get("offsets") or [])]
+    users += [f"linked mesh {skin.get('name')}/{slot}/{att_name}"  # 4.3: a source mesh in another slot
+              for skin in d.skins(doc) for slot, atts in (skin.get("attachments") or {}).items()
+              for att_name, att in (atts or {}).items()
+              if (att or {}).get("type") == "linkedmesh" and att.get("slot") == name and slot != name]
     if users:
         raise EditError(f"slot {name!r} is still used by {', '.join(users)}; change those first")
+    before = _slot_names(doc)
     doc["slots"] = [s for s in d.slots(doc) if s["name"] != name]
     for skin in d.skins(doc):
         (skin.get("attachments") or {}).pop(name, None)
@@ -335,13 +388,94 @@ def remove_slot(doc: dict, name: str) -> dict:
         ((anim or {}).get("slots") or {}).pop(name, None)
         for skin_atts in ((anim or {}).get("attachments") or {}).values():
             (skin_atts or {}).pop(name, None)
-    return {"op": "remove_slot", "slot": name, **_draw_order_note(doc)}
+    return {"op": "remove_slot", "slot": name, **_kept_keys(doc, before)}
+
+
+def _renamed_keys(mapping, renamed: dict[str, str]):
+    """`mapping` with its keys renamed at once, each keeping its place."""
+    if not isinstance(mapping, dict):
+        return mapping
+    return {renamed.get(k, k): v for k, v in mapping.items()}
+
+
+def _rename_slots(doc: dict, renamed: dict[str, str]) -> None:
+    """Rename slots everywhere the format names them."""
+    slot_key, source_key = d.path_slot_key(doc), d.linked_mesh_key(doc)
+    for s in d.slots(doc):
+        s["name"] = renamed.get(s["name"], s["name"])
+    for c in d.constraints(doc, "path"):
+        if c.get(slot_key) in renamed:
+            c[slot_key] = renamed[c[slot_key]]
+    for skin in d.skins(doc):
+        if "attachments" in skin:
+            skin["attachments"] = _renamed_keys(skin["attachments"], renamed)
+        for atts in (skin.get("attachments") or {}).values():
+            for att in (atts or {}).values():
+                if not isinstance(att, dict):
+                    continue
+                if att.get("type") == "clipping" and att.get("end") in renamed:
+                    att["end"] = renamed[att["end"]]
+                if att.get("type") == "linkedmesh" and source_key == "source" and att.get("slot") in renamed:
+                    att["slot"] = renamed[att["slot"]]  # 4.3: the source mesh's slot
+    for anim in (doc.get("animations") or {}).values():
+        if not isinstance(anim, dict):
+            continue
+        if "slots" in anim:
+            anim["slots"] = _renamed_keys(anim["slots"], renamed)
+        for skin_name, slots in list((anim.get("attachments") or {}).items()):
+            anim["attachments"][skin_name] = _renamed_keys(slots, renamed)
+    # draw order keys are renamed by keep_draw_order_keys
+
+
+def rename_slot(doc: dict, name: str, to: str) -> dict:
+    """Rename a slot everywhere. A '/' puts it in a draw order folder (head ->
+    face/head); without one it leaves its folder."""
+    _slot(doc, name)
+    _check_slot_name(doc, to)
+    before = _slot_names(doc)
+    _keep_folders_together(before, [to if n == name else n for n in before])
+    _rename_slots(doc, {name: to})
+    return {"op": "rename_slot", "slot": name, "to": to, **_kept_keys(doc, before, {name: to}),
+            "note": "game code that looks the slot up by name needs the new name"}
+
+
+def rename_folder(doc: dict, name: str, to: str) -> dict:
+    """Rename a draw order folder (renaming its slots), moving its draw order keys
+    along; to='' takes its slots out of it, into its parent folder."""
+    names = _slot_names(doc)
+    folders = d.draw_order_folders(names)
+    if name not in folders:
+        raise EditError(f"no draw order folder {name!r} (have {', '.join(folders) or 'none'})")
+    if to and any(not part for part in to.split("/")):
+        raise EditError(f"bad folder name {to!r}")
+    if to and to != name and (to in folders or to in names):
+        raise EditError(f"{to!r} is already a {'folder' if to in folders else 'slot'}: renaming onto it would merge "
+                        "them; pick another name, or rename the slots one by one")
+
+    def moved(path: str) -> str:
+        rest = path[len(name) + 1:]
+        return f"{to}/{rest}" if to else rest
+
+    renamed = {s: moved(s) for s in folders[name]}
+    taken = set(names) - set(renamed)
+    clash = [n for n in renamed.values() if n in taken]
+    if clash:
+        raise EditError(f"slot {clash[0]!r} already exists")
+    if not to and any(n in folders for n in renamed.values()):
+        raise EditError(f"a slot of {name!r} would get the name of a folder")
+    folders_renamed = {f: (f"{to}{f[len(name):]}" if to else f[len(name) + 1:]) for f in folders
+                       if f == name or f.startswith(name + "/")}
+    _keep_folders_together(names, [renamed.get(n, n) for n in names])
+    _rename_slots(doc, renamed)
+    return {"op": "rename_folder", "folder": name, "to": to, "slots": renamed,
+            **_kept_keys(doc, names, renamed, folders_renamed),
+            "note": "game code that looks these slots up by name needs the new names"}
 
 
 def set_draw_order(doc: dict, order: list[str] | None = None, slot: str | None = None, index: int | None = None) -> dict:
     """Reorder slots (first drawn first, at the back): give the full `order`,
-    or move one `slot` to `index`."""
-    names = [s["name"] for s in d.slots(doc)]
+    or move one `slot` to `index`. Draw order keys keep showing what they did."""
+    names = _slot_names(doc)
     if order is not None:
         if sorted(order) != sorted(names):
             missing, extra = set(names) - set(order), set(order) - set(names)
@@ -352,22 +486,70 @@ def set_draw_order(doc: dict, order: list[str] | None = None, slot: str | None =
         order.insert(max(0, min(index, len(order))), slot)
     else:
         raise EditError("give order, or slot and index")
+    _keep_folders_together(names, order)
     by_name = d.slot_map(doc)
     doc["slots"] = [by_name[n] for n in order]
-    return {"op": "set_draw_order", "order": order, **_draw_order_note(doc)}
+    return {"op": "set_draw_order", "order": order, **_kept_keys(doc, names)}
 
 
-def _draw_order_note(doc: dict) -> dict:
-    keyed = [n for n, a in (doc.get("animations") or {}).items() if (a or {}).get("drawOrder")]
-    if not keyed:
-        return {}
-    return {"note": f"drawOrder keys in {', '.join(keyed)} are offsets from the setup order; re-check them"}
+# The skeleton header's settable fields: referenceScale (physics distances
+# are relative to it), the editor's fps and its images and audio folders.
+_HEADER_DEFAULTS = {"referenceScale": 100, "fps": 30, "images": None, "audio": None}
+
+
+def set_skeleton(doc: dict, **fields) -> dict:
+    """Set skeleton header fields (referenceScale, fps, images, audio)."""
+    unknown = [k for k in fields if k not in _HEADER_DEFAULTS]
+    if unknown:
+        raise EditError(f"the skeleton header has no settable {', '.join(map(repr, unknown))} "
+                        f"(have {', '.join(_HEADER_DEFAULTS)})")
+    for key in ("referenceScale", "fps"):
+        if key in fields and (not isinstance(fields[key], (int, float)) or fields[key] <= 0):
+            raise EditError(f"{key} must be a number above 0")
+    header = doc.setdefault("skeleton", {})
+    _set_fields(header, fields, tuple(_HEADER_DEFAULTS), _HEADER_DEFAULTS)
+    return {"op": "set_skeleton", **{k: header[k] for k in _HEADER_DEFAULTS if k in header}}
+
+
+_EVENT_DEFAULTS = {"int": 0, "float": 0, "string": "", "audio": None, "volume": 1, "balance": 0}
+
+
+def set_event(doc: dict, name: str, **fields) -> dict:
+    """Define an event or change its defaults (int, float, string) and its
+    sound (audio: a path in the skeleton's audio folder, volume 0..1,
+    balance -1..1); keys of the event carry these unless they override them."""
+    if not isinstance(name, str) or not name:
+        raise EditError("an event needs a name")
+    unknown = [k for k in fields if k not in _EVENT_DEFAULTS]
+    if unknown:
+        raise EditError(f"events have no {', '.join(map(repr, unknown))} (have {', '.join(_EVENT_DEFAULTS)})")
+    event = doc.setdefault("events", {}).setdefault(name, {})
+    _set_fields(event, fields, tuple(_EVENT_DEFAULTS), _EVENT_DEFAULTS)
+    if "audio" not in event:
+        for key in ("volume", "balance"):
+            if key in event:
+                raise EditError(f"{key} needs audio (the runtime reads it only for events with a sound)")
+    return {"op": "set_event", "event": name, **event}
+
+
+def remove_event(doc: dict, name: str) -> dict:
+    if name not in (doc.get("events") or {}):
+        raise EditError(f"no event {name!r}")
+    keyed = [a for a, anim in (doc.get("animations") or {}).items()
+             if any(k.get("name") == name for k in (anim or {}).get("events") or [])]
+    if keyed:
+        raise EditError(f"event {name!r} is keyed in {', '.join(keyed)}; remove those keys first")
+    del doc["events"][name]
+    if not doc["events"]:
+        del doc["events"]
+    return {"op": "remove_event", "event": name}
 
 
 _OPS = {
+    "set_skeleton": set_skeleton, "set_event": set_event, "remove_event": remove_event,
     "add_bone": add_bone, "set_bone": set_bone, "move_pivot": move_pivot, "rename_bone": rename_bone,
-    "remove_bone": remove_bone, "add_slot": add_slot, "set_slot": set_slot, "remove_slot": remove_slot,
-    "set_draw_order": set_draw_order,
+    "remove_bone": remove_bone, "add_slot": add_slot, "set_slot": set_slot, "rename_slot": rename_slot,
+    "rename_folder": rename_folder, "remove_slot": remove_slot, "set_draw_order": set_draw_order,
 }
 OP_NAMES = tuple(_OPS)
 

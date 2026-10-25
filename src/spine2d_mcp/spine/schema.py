@@ -1,14 +1,19 @@
-"""Pydantic models for the Spine 4.2 skeleton JSON format.
+"""Pydantic models for the Spine skeleton JSON the PSD importer writes.
 
-Field names and defaults mirror the canonical reader
-`reference/SkeletonJson.java` (spine-runtimes 4.2). The Spine editor's reader
+The importer builds bones, slots and region skins, which read the same in
+format 4.2 and 4.3; only the `skeleton.spine` header differs. (`ik` is the
+4.2 layout and stays empty: constraints are added later by the editing tools,
+which write each version's layout.)
+
+Field names and defaults mirror the canonical readers
+`reference/SkeletonJson-4.2.java` and `-4.3.java`. The Spine editor's reader
 rejects unknown fields and is sensitive to exact names, so every field here is
 verified against that reader. Serialization must use
 `model_dump(by_alias=True, exclude_defaults=True, exclude_none=True)` — the
 editor tolerates omitted fields (it applies the same defaults) but chokes on
 redundant default-valued fields.
 
-Notable 4.2 specifics:
+Notable 4.x specifics:
 - Bone transform-inheritance field is `inherit` (default "normal"), NOT
   `transform` as in older versions.
 - Rotate animation keyframes store the angle under `value` (not `angle`, the
@@ -23,6 +28,8 @@ from __future__ import annotations
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from .versions import NEWEST
 
 
 class _SpineModel(BaseModel):
@@ -48,7 +55,7 @@ class Skeleton(_SpineModel):
     """The `skeleton` header object. `spine` version string is required for the
     editor to pick the right reader."""
 
-    spine: str = "4.2"
+    spine: str = NEWEST
     x: float = 0.0
     y: float = 0.0
     width: float = 0.0
@@ -124,7 +131,7 @@ class Skin(_SpineModel):
 
 
 class SpineProject(_SpineModel):
-    """Top-level Spine 4.2 skeleton document."""
+    """Top-level skeleton document."""
 
     skeleton: Skeleton = Field(default_factory=Skeleton)
     bones: list[Bone] = Field(default_factory=list)
