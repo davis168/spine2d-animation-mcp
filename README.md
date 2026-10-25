@@ -143,8 +143,10 @@ Run `/mcp` in a new session to check it is connected.
 
 ## Project layout
 
+`src/` is the `spine2d_mcp` package (`pyproject.toml` installs it under that name):
+
 ```
-src/spine2d_mcp/
+src/
   server.py            FastMCP server: tool definitions
   pipeline.py          PSD -> Spine project orchestration
   edits.py             load -> change -> check -> save for every editing tool
@@ -152,7 +154,8 @@ src/spine2d_mcp/
   project.py           a game project's format version, and when to ask
   preview.py           Spine Web Player page
   spine_cli.py         Spine editor CLI: import, export, project info
-  runtime/             spine-core runtime check and pose comparison (Node script + wrapper)
+  editor_quirks.py     what the Spine editor's import loses, recorded and put back in exports
+  runtime/             spine-core runtime check, pose comparison and binary restore (Node scripts + wrapper)
   ops/                 edits as pure functions: animation, rig, constraints, attachments, meshes, shapes, skins
   psd/parser.py        PSD -> flat layer list (+ pivot markers)
   psd/conventions.py   bone hierarchy, joint sides, cap pivots, [pivot] tag

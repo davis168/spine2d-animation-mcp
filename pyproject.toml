@@ -21,12 +21,19 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/spine2d_mcp"]
+# src/ is the spine2d_mcp package: it is built and installed under that name
+# (hatchling cannot install a renamed folder in editable mode; setuptools can).
+# A new subpackage goes in `packages` too.
+[tool.setuptools]
+package-dir = { "spine2d_mcp" = "src" }
+packages = ["spine2d_mcp", "spine2d_mcp.atlas", "spine2d_mcp.ops", "spine2d_mcp.psd", "spine2d_mcp.runtime",
+            "spine2d_mcp.spine"]
+
+[tool.setuptools.package-data]
+"spine2d_mcp.runtime" = ["*.mjs"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
 testpaths = ["tests"]
