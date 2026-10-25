@@ -44,8 +44,6 @@ env/
 archive/
 
 # Session/handoff working files — local only, not for the public repo
-CLAUDE.md
-AGENTS.md
 tasks.md
 journal.md
 session-handoff.md
