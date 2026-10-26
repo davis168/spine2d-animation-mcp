@@ -15,6 +15,7 @@ import math
 from ..edits import EditError
 from ..spine import document as d
 from ..spine import versions
+from . import rig
 from .attachments import slot_attachments, to_bone_space
 from .rig import require_normal_chain, weighted_influences
 
@@ -165,6 +166,64 @@ def _deform_users(doc: dict, skin: str, slot: str, name: str) -> list[str]:
                 .get(owner[2]) or {}).get("deform")]
 
 
+def order_influences(doc: dict) -> list[str]:
+    """List each weighted vertex's bones in bone order, moving every deform
+    key's deltas (one pair per influence) along with them, including keys on
+    linked meshes that share those vertices. The runtimes read any order; the
+    Spine editor refuses a mesh whose vertices list two bones in both orders.
+    Returns "skin/slot/attachment" for each attachment reordered."""
+    moved: dict[tuple[str, str, str], list[int]] = {}  # new influence position -> old position
+    for skin in d.skins(doc):
+        for slot, atts in (skin.get("attachments") or {}).items():
+            for name, att in (atts or {}).items():
+                if not (isinstance(att, dict) and att.get("type", "region") in rig._VERTEX_TYPES
+                        and "vertices" in att and rig._is_weighted(att)):
+                    continue
+                vertices, out, order, i, first = att["vertices"], [], [], 0, 0
+                while i < len(vertices):
+                    n = int(vertices[i])
+                    records = [vertices[i + 1 + 4 * j:i + 5 + 4 * j] for j in range(n)]
+                    ranked = sorted(range(n), key=lambda j: records[j][0])
+                    out += [n] + [v for j in ranked for v in records[j]]
+                    order += [first + j for j in ranked]
+                    first += n
+                    i += 1 + 4 * n
+                if order != sorted(order):
+                    att["vertices"] = out
+                    moved[(skin.get("name"), slot, name)] = order
+    if not moved:
+        return []
+    owners = dict(moved)
+    for skin in d.skins(doc):  # linked meshes key deforms in their source's influence order
+        for slot, atts in (skin.get("attachments") or {}).items():
+            for name, att in (atts or {}).items():
+                if isinstance(att, dict) and att.get("type") == "linkedmesh":
+                    source = (att.get("skin", "default"), att.get("slot", slot), att.get("source", att.get("parent")))
+                    if source in moved:
+                        owners[(skin.get("name"), slot, name)] = moved[source]
+    for anim in (doc.get("animations") or {}).values():
+        for (skin, slot, name), order in owners.items():
+            timelines = ((((anim or {}).get("attachments") or {}).get(skin) or {}).get(slot) or {}).get(name) or {}
+            for key in timelines.get("deform") or []:
+                deltas = key.get("vertices")
+                if not deltas:
+                    continue
+                full = [0.0] * (2 * len(order))
+                offset = key.get("offset", 0)
+                full[offset:offset + len(deltas)] = deltas
+                full = [c for old in order for c in full[2 * old:2 * old + 2]]
+                start = next((k for k, v in enumerate(full) if v), None)
+                key.pop("offset", None)
+                if start is None:
+                    key.pop("vertices")  # all zero: the setup pose
+                    continue
+                end = len(full) - next(k for k, v in enumerate(reversed(full)) if v)
+                key["vertices"] = full[start:end]
+                if start:
+                    key["offset"] = start
+    return ["/".join(owner) for owner in moved]
+
+
 def add_mesh(
     doc: dict,
     slot: str,
@@ -195,7 +254,7 @@ def add_mesh(
     slot_entry = d.slot_map(doc).get(slot)
     if slot_entry is None:
         raise EditError(f"no slot {slot!r}")
-    converted = None
+    converted, image_name = None, None
     if size is None:
         region = ((((d.find_skin(doc, skin) or {}).get("attachments") or {}).get(slot)) or {}).get(name)
         if not isinstance(region, dict) or region.get("type", "region") != "region":
@@ -205,6 +264,7 @@ def add_mesh(
         x, y, rotation = region.get("x", 0), region.get("y", 0), region.get("rotation", 0)
         scaleX, scaleY = region.get("scaleX", 1), region.get("scaleY", 1)
         path = path or region.get("path")
+        image_name = region.get("name")  # the image, when the attachment names it (the PSD importer does)
         sequence = sequence or region.get("sequence")
         color = color or region.get("color")
         converted, replace = name, True
@@ -216,7 +276,9 @@ def add_mesh(
     uvs, hull, triangles, edges = grid(cols, rows)
     points = _placed(uvs, width, height, x, y, rotation, scaleX, scaleY)
     att: dict = {"type": "mesh"}
-    if path and path != name:
+    if image_name:
+        att["name"] = image_name
+    if path and path != (image_name or name):
         att["path"] = path
     if color:
         att["color"] = color

@@ -73,6 +73,7 @@ uv run spine2d-mcp                        # run the server on stdio
 
 These were found by round trips through real editors (4.3.00–4.3.26 and 4.2.43). The tools enforce them:
 - A named skin must not hold an attachment under a key the default skin also has in that slot; the editor refuses the file. Use `edit_skin` `move_to_skins` (skin placeholders) instead.
+- A weighted mesh must list every vertex's bones in one order (the tools use bone order); the editor refuses mixed orders ("Index -2 out of bounds"). `spine_import` hands it a reordered copy (`order_influences`, deform keys moved along).
 - Physics `rotate`/`scaleX`/`shearX` need a bone with length; the editor drops them otherwise. `add_constraint` refuses them on zero-length bones, which PSD-imported bones are.
 - Draw order folders are slot-name prefixes (`arms/hand_left`) kept contiguous in setup order. `drawOrderFolder` is an array of `{slots, keys}`, with `slots` listing every slot of the folder in setup order. The editor keeps keys only for top-level folders.
 - PNG/GIF export renders one "current" skin (with several, the alphabetically first non-default one), and a named skin only beside a default skin. `spine_export` renders a JSON copy with the shown skins merged into skin `shown` and an empty default skin. Frame files replace `/` in names with `-`.

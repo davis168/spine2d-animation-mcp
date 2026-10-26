@@ -13,6 +13,7 @@ are tested with (the launcher downloads it).
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -180,10 +181,12 @@ def spine_import(
     spine_project: str | Path | None = None,
     skeleton_name: str | None = None,
     editor_version: str | None = None,
+    replace: bool = False,
 ) -> dict:
     project_path = Path(project_path)
     version = json_version(project_path)
     target = Path(spine_project) if spine_project else project_path.with_suffix(".spine")
+    name = skeleton_name or project_path.stem
     doc = json.loads(project_path.read_text(encoding="utf-8"))
     clashes = d.default_skin_clashes(doc)
     if clashes:
@@ -192,6 +195,20 @@ def spine_import(
             + ", ".join("/".join(c) for c in clashes) + "): move it out of the default skin with edit_skin "
             "move_to_skins, or use another name in the skin")
     editor = editor_for(version, editor_version)
+    output = target
+    if target.exists():
+        # The editor adds a skeleton whose name the project already holds as "<name>2".
+        held = project_info(target, editor).get("skeletons") or []
+        if name in held:
+            if not replace:
+                raise SpineCliError(
+                    f"{target.name} already holds skeleton {name!r}, and the editor would add {name + '2'!r} beside "
+                    "it: pass replace=true to replace the project, or give another spine_project or skeleton_name")
+            if set(held) != {name}:
+                raise SpineCliError(
+                    f"{target.name} also holds {', '.join(sorted(set(held) - {name}))}, and the editor's CLI cannot "
+                    "replace one skeleton of several: import into another .spine")
+            output = target.with_name(f".{target.stem}.replacing.spine")
     given, header = dict(doc), (doc.get("skeleton") or {}).get("spine")
     if editor and header != editor and versions.major_minor(header) == versions.major_minor(editor):
         # An editor warns unless the header names its own release; the data
@@ -204,24 +221,43 @@ def spine_import(
         order = editor_animation_order(list(animations), editor)
         if order != list(animations):
             given["animations"] = {name: animations[name] for name in order}
+    from .ops.meshes import order_influences
+
+    ordered = copy.deepcopy(given)
+    reordered = order_influences(ordered)
+    if reordered:
+        # The editor refuses weighted vertices that list bones in different
+        # orders; the runtimes read any order, so give it bone order.
+        given = ordered
     source = project_path
     if given["skeleton"] is not doc.get("skeleton") or given.get("animations") is not doc.get("animations"):
         # import a copy beside the original, so its images path still resolves
         source = project_path.with_name(f".{project_path.stem}.import-{editor}.json")
         source.write_text(json.dumps(given), encoding="utf-8")
     try:
-        run = run_spine(["-i", str(source), "-o", str(target), "-r", skeleton_name or project_path.stem], editor)
+        run = run_spine(["-i", str(source), "-o", str(output), "-r", name], editor)
+        if output != target:
+            if run.ok and output.is_file():
+                os.replace(output, target)
+            else:
+                output.unlink(missing_ok=True)
     finally:
         if source != project_path:
             source.unlink(missing_ok=True)
     result = _result(run, spine_project=str(target), format_version=version)
+    if output != target and run.ok:
+        result["replaced"] = True
+    if reordered:
+        result.setdefault("warnings", []).append(
+            f"gave the editor {', '.join(reordered)} with each vertex's bones in bone order, since it refuses "
+            "weighted vertices that list bones in different orders (the same mesh; the JSON is unchanged)")
     caveats = editor_quirks.editor_caveats(run.editor or editor, doc)
     if caveats:
         result.setdefault("warnings", []).extend(caveats)
     changed = import_changes(doc)
     if changed:
         result["changed_on_import"] = changed
-    if run.ok and editor_quirks.save_record(target, skeleton_name or project_path.stem, project_path, doc):
+    if run.ok and editor_quirks.save_record(target, name, project_path, doc):
         result["note"] = ("recorded what the editor's import loses; JSON and binary exports from this project "
                           "with spine_export put it back")
     return result
@@ -330,31 +366,77 @@ def _group_frames(folder: Path, skeleton: str, names: list[str] | None = None,
     return {k: [p for _, p in sorted(v)] for k, v in groups.items()}
 
 
+_LINK_KEYS = ("type", "skin", "source", "parent", "slot", "timelines")
+_MESH_GEOMETRY = ("uvs", "triangles", "vertices", "hull", "edges")
+
+
 def _shown_copy(doc: dict, base: Path, skins: list[str]) -> dict:
-    """A copy of the skeleton whose only skin is `skins` combined (later skins win a placeholder),
-    so the editor renders that look: with several skins it renders an arbitrary "current" one.
-    Image and audio folders become absolute, so the copy works from any folder."""
+    """A copy of the skeleton whose only skin is `skins` combined in that order, the later
+    winning a placeholder as with the runtime's addSkin, so the editor renders that look:
+    with several skins it renders an arbitrary "current" one.
+
+    One JSON skin cannot hold what addSkin keeps by reference, so a linked mesh whose source
+    no longer shows (another skin, often the linked mesh itself, took its placeholder) is
+    written as a full mesh: the source's geometry with its own name, path and size.
+    Animation keys on skin attachments follow the attachment that shows. Image and audio
+    folders become absolute, so the copy works from any folder."""
     have = {s.get("name") for s in d.skins(doc)}
     unknown = [s for s in skins if s not in have]
     if unknown:
         raise SpineCliError(f"no skin {', '.join(unknown)} (have {', '.join(sorted(have - {'default'}))})")
     copy = json.loads(json.dumps(doc))
     shown: dict = {"name": SHOWN_SKIN, "attachments": {}}
-    for skin in d.skins(copy):
-        if skin.get("name") not in skins:
-            continue
+    winner: dict[tuple[str, str], str] = {}  # (slot, placeholder) -> the skin that shows there
+    for name in dict.fromkeys(skins):
+        skin = d.find_skin(copy, name) or {}
         for slot, atts in (skin.get("attachments") or {}).items():
             shown["attachments"].setdefault(slot, {}).update(atts)
+            winner.update({(slot, key): name for key in atts})
         for key, value in skin.items():
             if isinstance(value, list):  # skin bones and constraints
                 shown[key] = shown.get(key, []) + [v for v in value if v not in shown.get(key, [])]
+    inherited: dict[tuple[str, str], tuple[str, str, str]] = {}  # unlinked mesh -> its source's keys
     for slot, atts in shown["attachments"].items():
         for name, att in atts.items():
-            source = (att or {}).get("skin")
-            if source in skins:
+            if not isinstance(att, dict) or att.get("type") != "linkedmesh":
+                continue
+            source_skin = att.get("skin", "default")
+            if source_skin == "default":
+                continue
+            if source_skin not in skins:
+                raise SpineCliError(f"linked mesh {slot}/{name} uses a mesh in skin {source_skin!r}: add it to skins")
+            where = (source_skin, att.get("slot", slot), att.get("source", att.get("parent")))
+            source = (((d.find_skin(copy, where[0]) or {}).get("attachments") or {}).get(where[1]) or {}).get(where[2])
+            if not isinstance(source, dict):
+                raise SpineCliError(f"linked mesh {slot}/{name}: no mesh {where[2]!r} in skin {where[0]!r}")
+            if shown["attachments"].get(where[1], {}).get(where[2]) is source:
                 att["skin"] = SHOWN_SKIN
-            elif source not in (None, "default"):
-                raise SpineCliError(f"linked mesh {slot}/{name} uses a mesh in skin {source!r}: add it to skins")
+                continue
+            if att.get("timelines", True):
+                inherited[(slot, name)] = where
+            own = {k: v for k, v in att.items() if k not in _LINK_KEYS}
+            att.clear()
+            att.update({"type": "mesh", **{k: source[k] for k in _MESH_GEOMETRY if k in source},
+                        **{k: source[k] for k in ("width", "height") if k in source}, **own})
+    for anim in (copy.get("animations") or {}).values():
+        keyed = (anim or {}).get("attachments")
+        if not isinstance(keyed, dict):
+            continue
+        moved: dict = {}
+        for (slot, name), skin_name in winner.items():
+            timelines = ((keyed.get(skin_name) or {}).get(slot) or {}).get(name)
+            if timelines is None and (slot, name) in inherited:
+                src_skin, src_slot, src_name = inherited[(slot, name)]
+                timelines = ((keyed.get(src_skin) or {}).get(src_slot) or {}).get(src_name)
+            if timelines:
+                moved.setdefault(slot, {})[name] = timelines
+        kept = {k: v for k, v in keyed.items() if k == "default"}
+        if moved:
+            kept[SHOWN_SKIN] = moved
+        if kept:
+            anim["attachments"] = kept
+        else:
+            anim.pop("attachments")
     # The editor renders a named skin only beside a default one (an empty one will do).
     copy["skins"] = ([s for s in d.skins(copy) if s.get("name") == "default"] or [{"name": "default"}]) + [shown]
     header = copy.setdefault("skeleton", {})
