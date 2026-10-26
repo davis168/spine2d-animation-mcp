@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw
 from . import runtime
 from .atlas import default_atlas
 from .spine import document as d
-from .spine.motion import display_skins, keyed_times
+from .spine.motion import keyed_times
 
 BEFORE = (255, 110, 70)  # the Spine-like warm tint for earlier poses
 AFTER = (70, 180, 255)  # and cool for later ones
@@ -55,7 +55,7 @@ def onion_skin(project_path: str | Path, animation: str, time: float | None = No
     fps = float((doc.get("skeleton") or {}).get("fps") or 30)
     duration = d.animation_duration(anim)
     time = duration / 2 if time is None else min(max(time, 0.0), duration)
-    skins = display_skins(doc) if skins is None else skins
+    skins = d.display_skins(doc) if skins is None else skins
 
     if times is not None:
         ghosts = [(t, "before" if t < time else "after") for t in sorted(set(times)) if abs(t - time) > 1e-6]

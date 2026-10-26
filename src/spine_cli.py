@@ -302,15 +302,79 @@ def gif_durations(frames: int, fps: float) -> list[int]:
     return out
 
 
-def _group_frames(folder: Path, skeleton: str) -> dict[str, list[Path]]:
+SHOWN_SKIN = "shown"  # the one skin of the copy that frames are rendered from
+
+
+def _safe(name: str) -> str:
+    """How the editor writes an animation or skin name into frame file names."""
+    return name.replace("/", "-")
+
+
+def _group_frames(folder: Path, skeleton: str, names: list[str] | None = None,
+                  skin: str | None = None) -> dict[str, list[Path]]:
+    """Frames per animation. The editor names them <skeleton>[-<skin>]-<animation>_<n>.png with
+    each / as -, so with `names` (the animations) groups are keyed by each animation's own name."""
+    known = sorted(((_safe(n), n) for n in names or []), key=lambda pair: -len(pair[0]))
+    head = f"{skeleton}-{_safe(skin)}-" if skin else f"{skeleton}-"
     groups: dict[str, list[tuple[int, Path]]] = {}
     for p in folder.glob("*.png"):
         m = _FRAME.match(p.name)
-        if m:
-            name = m.group("prefix")
-            name = name[len(skeleton) + 1:] if name.startswith(skeleton + "-") else name
-            groups.setdefault(name, []).append((int(m.group("index")), p))
+        if not m:
+            continue
+        prefix = m.group("prefix")
+        name = next((n for safe, n in known if prefix == head + safe), None)
+        if name is None:  # a skin we did not choose (a .spine project's current skin)
+            name = next((n for safe, n in known if prefix.startswith(skeleton + "-") and prefix.endswith("-" + safe)),
+                        prefix[len(skeleton) + 1:] if prefix.startswith(skeleton + "-") else prefix)
+        groups.setdefault(name, []).append((int(m.group("index")), p))
     return {k: [p for _, p in sorted(v)] for k, v in groups.items()}
+
+
+def _shown_copy(doc: dict, base: Path, skins: list[str]) -> dict:
+    """A copy of the skeleton whose only skin is `skins` combined (later skins win a placeholder),
+    so the editor renders that look: with several skins it renders an arbitrary "current" one.
+    Image and audio folders become absolute, so the copy works from any folder."""
+    have = {s.get("name") for s in d.skins(doc)}
+    unknown = [s for s in skins if s not in have]
+    if unknown:
+        raise SpineCliError(f"no skin {', '.join(unknown)} (have {', '.join(sorted(have - {'default'}))})")
+    copy = json.loads(json.dumps(doc))
+    shown: dict = {"name": SHOWN_SKIN, "attachments": {}}
+    for skin in d.skins(copy):
+        if skin.get("name") not in skins:
+            continue
+        for slot, atts in (skin.get("attachments") or {}).items():
+            shown["attachments"].setdefault(slot, {}).update(atts)
+        for key, value in skin.items():
+            if isinstance(value, list):  # skin bones and constraints
+                shown[key] = shown.get(key, []) + [v for v in value if v not in shown.get(key, [])]
+    for slot, atts in shown["attachments"].items():
+        for name, att in atts.items():
+            source = (att or {}).get("skin")
+            if source in skins:
+                att["skin"] = SHOWN_SKIN
+            elif source not in (None, "default"):
+                raise SpineCliError(f"linked mesh {slot}/{name} uses a mesh in skin {source!r}: add it to skins")
+    # The editor renders a named skin only beside a default one (an empty one will do).
+    copy["skins"] = ([s for s in d.skins(copy) if s.get("name") == "default"] or [{"name": "default"}]) + [shown]
+    header = copy.setdefault("skeleton", {})
+    for folder in ("images", "audio"):
+        if header.get(folder) and not Path(header[folder]).is_absolute():
+            header[folder] = str((base / header[folder]).resolve()) + os.sep
+    return copy
+
+
+def _missing_images(doc: dict, base: Path) -> str | None:
+    """A warning when attachment images the frames need are not in the skeleton's images folder."""
+    from .ops.attachments import attachment_paths, image_files
+
+    folder = Path((doc.get("skeleton") or {}).get("images") or ".")
+    folder = folder if folder.is_absolute() else (base / folder).resolve()
+    missing = sorted(attachment_paths(doc) - set(image_files(folder)))
+    if not missing:
+        return None
+    return (f"{len(missing)} attachment image(s) are not in {folder} ({', '.join(missing[:5])}"
+            f"{', ...' if len(missing) > 5 else ''}): the editor draws those parts blank")
 
 
 def spine_export(
@@ -324,13 +388,18 @@ def spine_export(
     editor_version: str | None = None,
     format_version: str | None = None,
     restore: bool = True,
+    skins: list[str] | None = None,
 ) -> dict:
     """Export with the Spine CLI: png (frame sequences), gif (encoded from the
     frames), json or binary (skeleton data in the editor's format version).
 
     A JSON input is opened by an editor of its own format version, so its
     exports keep that version; a .spine project is opened by an editor of
-    `format_version` (default: the newest installed supported one)."""
+    `format_version` (default: the newest installed supported one).
+
+    Frames of a JSON input show `skins` combined (default: the skins holding
+    the setup pose's attachments), rendered from a copy with that one skin;
+    a .spine project's frames show its current skin."""
     input_path, output_dir = Path(input_path), Path(output_dir)
     if format not in ("png", "gif", "json", "binary"):
         raise SpineCliError("format must be png, gif, json or binary")
@@ -370,22 +439,38 @@ def spine_export(
                 f"exported by Spine {run.editor}: the data is format {exported}, not the {version} asked for")
         return out
 
+    warnings: list[str] = []
+    shown_skins: list[str] | None = None
+    source, names, skin, staging = input_path, None, None, None
     if input_path.suffix.lower() == ".json":
         skeleton = input_path.stem
+        doc = json.loads(input_path.read_text(encoding="utf-8"))
+        names = list(doc.get("animations") or {})
+        shown_skins = d.display_skins(doc) if skins is None else list(skins)
+        if any(s.get("name") != "default" for s in d.skins(doc)) or skins is not None:
+            doc = _shown_copy(doc, input_path.parent, shown_skins)
+            staging = Path(tempfile.mkdtemp(prefix="spine-shown-"))
+            source = staging / input_path.name
+            source.write_text(json.dumps(doc), encoding="utf-8")
+            skin = SHOWN_SKIN
+        if missing := _missing_images(doc, input_path.parent):
+            warnings.append(missing)
     else:
-        skeletons = project_info(input_path, editor).get("skeletons") or []
-        if not skeletons:
+        if skins:
+            raise SpineCliError("skins applies to a JSON input; a .spine project's frames show its current skin")
+        info = project_info(input_path, editor)
+        if not info.get("skeletons"):
             raise SpineCliError(f"no skeleton found in {input_path}")
-        skeleton = skeletons[0]
+        skeleton, names = info["skeletons"][0], info.get("animations")
 
     frames_dir = output_dir / "frames" if format == "png" else Path(tempfile.mkdtemp(prefix="spine-frames-"))
     fd, settings_name = tempfile.mkstemp(suffix=".export.json")
     os.close(fd)
     settings_file = Path(settings_name)
     try:
-        settings_file.write_text(json.dumps(_png_settings(input_path, frames_dir, skeleton, fps, scale, background)))
+        settings_file.write_text(json.dumps(_png_settings(source, frames_dir, skeleton, fps, scale, background)))
         run = run_spine(["-e", str(settings_file)], editor)
-        groups = _group_frames(frames_dir, skeleton)
+        groups = _group_frames(frames_dir, skeleton, names, skin)
         if animations:
             unknown = sorted(set(animations) - set(groups))
             if unknown and run.ok:
@@ -393,26 +478,31 @@ def spine_export(
             for name in set(groups) - set(animations):
                 for p in groups.pop(name):
                     p.unlink()
-        record = editor_quirks.record_path(input_path)
-        lost = ["the frames show the project as the editor imported it: clips lost convex/inverse or nested folder "
-                "keys (preview_html shows the JSON as written)"] if record.is_file() else []
+        empty = sorted(n for n, paths in groups.items() if paths and max(Image.open(paths[0]).size) <= 2)
+        if empty:
+            warnings.append(f"the editor drew nothing for {', '.join(empty)}: check the skins and the images folder")
+        if editor_quirks.record_path(input_path).is_file():
+            warnings.append("the frames show the project as the editor imported it: clips lost convex/inverse or "
+                            "nested folder keys (preview_html shows the JSON as written)")
+        shown = {"skins": shown_skins} if shown_skins is not None else {}
         if format == "png":
-            out = _result(run, frames_dir=str(frames_dir), animations={k: len(v) for k, v in sorted(groups.items())})
-            if lost:
-                out.setdefault("warnings", []).extend(lost)
-            return out
-        gifs = {}
-        for name, paths in sorted(groups.items()):
-            images = [Image.open(p).convert("RGB") for p in paths]
-            target = output_dir / f"{skeleton}-{name}.gif"
-            images[0].save(target, save_all=True, append_images=images[1:],
-                           duration=gif_durations(len(images), fps), loop=0, optimize=True)
-            gifs[name] = {"path": str(target), "frames": len(images)}
-        out = _result(run, gifs=gifs)
-        if lost:
-            out.setdefault("warnings", []).extend(lost)
+            out = _result(run, frames_dir=str(frames_dir), animations={k: len(v) for k, v in sorted(groups.items())},
+                          **shown)
+        else:
+            gifs = {}
+            for name, paths in sorted(groups.items()):
+                images = [Image.open(p).convert("RGB") for p in paths]
+                target = output_dir / f"{skeleton}-{_safe(name)}.gif"
+                images[0].save(target, save_all=True, append_images=images[1:],
+                               duration=gif_durations(len(images), fps), loop=0, optimize=True)
+                gifs[name] = {"path": str(target), "frames": len(images)}
+            out = _result(run, gifs=gifs, **shown)
+        if warnings:
+            out.setdefault("warnings", []).extend(warnings)
         return out
     finally:
         settings_file.unlink(missing_ok=True)
         if format == "gif":
             shutil.rmtree(frames_dir, ignore_errors=True)
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)

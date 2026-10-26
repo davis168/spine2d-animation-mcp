@@ -1013,11 +1013,15 @@ def spine_export(
     allow_version_mismatch: bool = False,
     save_project_version: bool = False,
     restore: bool = True,
+    skins: list[str] | None = None,
 ) -> dict:
     """Render or export with the Spine editor's CLI.
 
     - png: one PNG per frame for each animation, in output_dir/frames.
     - gif: one looping GIF per animation (encoded from the PNG frames).
+      Frames of a JSON skeleton show `skins` combined (default: the skins
+      holding the setup pose's attachments); a .spine project's show its
+      current skin. Results are keyed by animation name ("outcome/dragon").
     - json / binary: skeleton data in a format version: a JSON input keeps its
       own; a .spine project exports in format_version, else the game
       project's (from output_dir), else $SPINE_FORMAT_VERSION, else it asks.
@@ -1041,6 +1045,7 @@ def spine_export(
         save_project_version: Save format_version as the game project's
             .spine-version (when the project did not say).
         restore: Put back what the editor's import lost (json and binary).
+        skins: Skins to show in png/gif frames of a JSON skeleton, combined.
     """
     source = Path(input_path)
     game = None
@@ -1055,7 +1060,7 @@ def spine_export(
         detected = proj.detect(output_dir).version
         version = format_version or (detected if versions.is_supported(detected) else None)
     result = spine_cli.spine_export(input_path, output_dir, format, animations, fps, scale, background,
-                                    editor_version, version, restore)
+                                    editor_version, version, restore, skins=skins)
     if game is not None and save_project_version and result.get("ok"):
         result["notes"] = [proj.save_declaration(game, version)]
     return result

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import runtime
 from .spine import document as d
-from .spine.motion import analyze, display_skins
+from .spine.motion import analyze
 from .spine.presets import LOOPING
 
 RATE = 60  # samples per second
@@ -27,7 +27,7 @@ def analyze_motion(project_path: str | Path, animations: list[str] | None = None
     if unknown:
         raise MotionError(f"no animation {', '.join(map(str, unknown))} (have {', '.join(have) or 'none'})")
     loops = set(loops) if loops is not None else LOOPING & set(have)
-    skins = display_skins(doc) if skins is None else skins
+    skins = d.display_skins(doc) if skins is None else skins
     sampled = runtime.motion(project_path, {
         "mode": "sample", "skins": skins, "rate": RATE,
         "animations": [{"name": n, "cycles": 2 if n in loops else 1} for n in names],
