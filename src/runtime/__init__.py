@@ -20,6 +20,7 @@ from ..spine import versions
 
 _SCRIPT = Path(__file__).with_name("runtime_check.mjs")
 _RESTORE = Path(__file__).with_name("binary_restore.mjs")
+_MOTION = Path(__file__).with_name("motion.mjs")
 
 
 def cache_dir(core_version: str) -> Path:
@@ -92,6 +93,35 @@ def runtime_check(project_path: str | Path, atlas_path: str | Path | None = None
     project_path = Path(project_path)
     atlas_path = Path(atlas_path) if atlas_path else default_atlas(project_path)
     return _run(project_path, atlas_path, poses=False, release=release)
+
+
+def motion(project_path: str | Path, request: dict, atlas_path: str | Path | None = None) -> dict:
+    """Play animations in spine-core like a game (AnimationState, constraints,
+    physics): `request` is motion.mjs's ("sample" frames or "render" triangles).
+    {"ran": False, "reason": ...} when the runtime cannot run."""
+    project_path = Path(project_path)
+    atlas_path = Path(atlas_path) if atlas_path else default_atlas(project_path)
+    if not atlas_path.is_file():
+        return {"ran": False, "reason": f"no atlas at {atlas_path}"}
+    version, reason = _file_version(project_path)
+    if version is None:
+        return {"ran": False, "reason": reason}
+    node = shutil.which("node")
+    if node is None:
+        return {"ran": False, "reason": "node not found"}
+    core, reason = _ensure_core(versions.get(version).runtime)
+    if core is None:
+        return {"ran": False, "reason": reason}
+    try:
+        proc = subprocess.run([node, str(_MOTION), str(project_path), str(atlas_path), str(core)],
+                              input=json.dumps(request), capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        return {"ran": False, "reason": "playing the animations timed out after 600 s"}
+    try:
+        result = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {"ran": False, "reason": f"motion script failed: {(proc.stderr or proc.stdout).strip()[-500:]}"}
+    return {"ran": True, **result}
 
 
 def restore_binary(skel_path: str | Path, record: dict) -> dict:

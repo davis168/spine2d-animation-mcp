@@ -12,6 +12,7 @@ from . import project as proj
 from . import spine_cli
 from .conversion import convert_file
 from .edits import EditError, edit_skeleton, report
+from .motion import analyze_motion as _analyze_motion
 from .ops import animation as anim_ops
 from .ops import attachments as att_ops
 from .ops import constraints as con_ops
@@ -19,6 +20,7 @@ from .ops import meshes as mesh_ops
 from .ops import rig as rig_ops
 from .ops import shapes as shape_ops
 from .ops import skins as skin_ops
+from .onion import onion_skin as _onion_skin
 from .pipeline import import_psd_to_spine as _import
 from .preview import phaser_html as _phaser
 from .preview import player_version
@@ -38,7 +40,9 @@ mcp = FastMCP(
         "skeleton is edited in the version it is written in, and a game project's version comes from its "
         "@esotericsoftware/spine-* dependency or a .spine-version file. Call inspect_skeleton before editing "
         "to learn names and versions. Every editing tool checks the result against the file's format and "
-        "refuses changes that introduce errors; run validate_skeleton after a series of edits.\n"
+        "refuses changes that introduce errors; run validate_skeleton after a series of edits. To judge how an "
+        "animation moves (smooth, pose to pose, natural), run analyze_motion and look at onion_skin images of what "
+        "it flags before changing keys.\n"
         "When a result has needs_answer, do not guess: ask the user its question with its options in chat "
         "(say which is recommended), wait for the answer, then do what the chosen option says. This happens "
         "when a game project's version is unknown or unclear, when a file's version differs from its game "
@@ -1095,6 +1099,96 @@ def preview_html(
         raise EditError("runtime must be player or phaser")
     path = _preview(project_path, atlas_path, out_path, animation)
     return {"preview_path": str(path), "player": f"@esotericsoftware/spine-player@{player_version(d.load(project_path))}"}
+
+
+@mcp.tool()
+def analyze_motion(
+    project_path: str,
+    animations: list[str] | None = None,
+    loops: list[str] | None = None,
+    skins: list[str] | None = None,
+    mixes: list[dict] | None = None,
+) -> dict:
+    """Measure how animations move as the viewer sees them, and find what
+    makes motion read robotic, stiff, floaty or jerky. Each animation plays
+    in spine-core like a game plays it (AnimationState, IK and other
+    constraints, physics) and is sampled 60 times a second; the attachments'
+    screen motion is measured.
+
+    Findings are ranked like a critique, each with its evidence (parts,
+    times, and the keys that move those parts) and a keyframe-level fix:
+    2 breaks the read: hitches (velocity jumps mid-move), teleports, loop
+      seams, mixes that jerk, limbs drawn longer than in the setup pose;
+    3 weight and timing: abrupt starts and stops (no slow out / slow in),
+      constant speed (linear spacing), straight paths (no arcs), parts that
+      all start and stop together (no overlap), long single moves (floaty),
+      linear keys far apart, nothing that settles (no poses);
+    4 life: dead-still holds, loops that barely move or move in lockstep,
+      mirrored (twinned) limbs, attachment swaps with nothing moving;
+    5 polish: one ease on every key, stepped (blocking) keys left in.
+    Per animation it also reports the key poses (holds and slow passing
+    poses), peak speed, and parent -> child start/stop offsets (overlap).
+    Thresholds are starting points at the skeleton's size: look at the
+    flagged moments with onion_skin before changing keys.
+
+    Args:
+        project_path: Absolute path to the skeleton .json (its atlas beside it).
+        animations: Animations to measure; default all.
+        loops: Animations that loop (played twice: seam, amplitude and
+            lockstep checks); default the presets' loops present (idle, walk).
+        skins: Skins to show (combined); default the skins holding the setup
+            pose's attachments.
+        mixes: Transitions to check, e.g. [{"from": "idle", "to": "deal",
+            "mix": 0.2}] (mix in seconds).
+    """
+    return _analyze_motion(project_path, animations, loops, skins, mixes)
+
+
+@mcp.tool()
+def onion_skin(
+    project_path: str,
+    animation: str,
+    time: float | None = None,
+    before: int = 6,
+    after: int = 6,
+    step: int = 2,
+    keyed: bool = False,
+    times: list[float] | None = None,
+    skins: list[str] | None = None,
+    trails: list[str] | None = None,
+    size: int = 1024,
+    background: str | None = "#1b1b24",
+    out_path: str | None = None,
+) -> dict:
+    """Draw an onion skin (the Spine editor's Ghosting view) as a PNG: the
+    pose at `time`, with tinted ghosts of the poses before (warm) and after
+    (cool) it, and spacing trails: a dot per frame along chosen parts' paths,
+    so arcs and spacing show at a glance (dots bunch where a part slows down
+    and spread where it is fast). Poses play in spine-core (constraints,
+    physics, clipping) and are drawn without the Spine editor. Open the PNG
+    to look at it.
+
+    Args:
+        project_path: Absolute path to the skeleton .json (its atlas and page
+            images beside it).
+        animation: The animation.
+        time: The current pose, in seconds; default the middle.
+        before: Frames before `time` to ghost (at the skeleton's fps, 30 by default).
+        after: Frames after `time` to ghost.
+        step: A ghost every `step` frames.
+        keyed: Ghost only frames that have keys, within before/after.
+        times: Ghost exactly these times instead (e.g. the key poses
+            analyze_motion reports).
+        skins: Skins to show (combined); default the skins holding the setup
+            pose's attachments.
+        trails: Slots whose paths to dot; default up to three parts on
+            different chains that travel farthest; [] for none.
+        size: The longer side of the image in pixels.
+        background: Background colour, or null for transparent.
+        out_path: PNG to write; default <skeleton>-<animation>-onion.png.
+    """
+    return _onion_skin(project_path, animation, time, before, after, step, keyed, times, skins, trails, size,
+                       background, out_path)
 
 
 def main() -> None:

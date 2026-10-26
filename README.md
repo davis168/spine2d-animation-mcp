@@ -31,6 +31,8 @@ The Spine editor has no live scripting API, so the server works on the files (sk
 | `convert_skeleton` | Convert a skeleton between 4.2 and 4.3 into a new file; refuses a lossy conversion unless agreed; verifies poses in both runtimes |
 | `spine_import` | Import the JSON into a `.spine` project with the Spine CLI, using an editor of the file's version |
 | `spine_export` | Render PNG frame sequences or GIFs, or export JSON/binary, with the Spine CLI |
+| `analyze_motion` | Plays animations in spine-core like a game (constraints, physics, mixes) and measures how they move: ranked findings (hitches, abrupt starts and stops, linear spacing, straight paths, no overlap, frozen holds, lockstep loops, twinning, stretch, loop seams, jerky mixes, ...) with the keys to change, plus each animation's key poses and overlap offsets |
+| `onion_skin` | A PNG onion skin (the editor's Ghosting view): the pose at a time with tinted ghosts before and after it, and dotted spacing trails along parts' paths; drawn from spine-core, without the editor |
 | `preview_html` | A self-contained Spine Web Player page in the file's version (skeleton, atlas and images embedded), or with `runtime="phaser"` a Phaser 4 game page with the matching spine-phaser-v4 (served over HTTP) |
 
 A typical session, in plain language to Claude: *"Import /path/to/hero.psd, add the idle, walk and wave presets, validate with the runtime check, export GIFs and make a preview."*
@@ -80,6 +82,23 @@ Where the editor's documentation is silent, the importer follows Esoteric's Phot
 ```
 
 Presets are tuned for importer rigs and scale with the skeleton's height: `idle` (2.0 s loop), `walk` (0.8 s in-place front-view loop; only the lifted leg moves, so the planted foot never slides), `wave` (2.5 s, either arm), `jump` (1.3 s, squash and stretch about the feet). `speed`, `amount` and `bone_map` (preset bone → your bone) adapt them.
+
+### Motion analysis and onion skins
+
+`analyze_motion` answers "does this move well?" with measurements instead of a guess. Each animation plays in spine-core the way the game plays it (AnimationState, IK and other constraints, physics), sampled 60 times a second, and the attachments' screen motion is measured. Findings are ranked like an animator's critique, each with the parts, the time, the keys that move those parts, and a keyframe-level fix:
+
+| Rank | Findings |
+|---|---|
+| 2, breaks the read | hitch (velocity jumps mid-move), teleport, loop seam, a mix that jerks, a bone drawn larger than in the setup pose |
+| 3, weight and timing | abrupt start or stop (no slow out / slow in), linear spacing, straight path (no arc), no overlap (parts start and stop together), floaty (long single moves), linear keys far apart, no poses |
+| 4, life | frozen hold, a loop that barely moves or moves in lockstep, twinning, an attachment swap with nothing moving |
+| 5, polish | the same ease on every key, stepped (blocking) keys left in |
+
+It also reports each animation's key poses (holds and slow passing poses), peak speed, and how much later each child starts and stops than its parent (overlap, in ms). Loops (`loops`, by default idle and walk) play twice and get seam, amplitude and lockstep checks; `mixes` checks transitions such as `{"from": "idle", "to": "deal", "mix": 0.2}`. Thresholds are starting points scaled to the skeleton: confirm a finding by eye before changing keys. Baked animations (a key on every frame) are judged by their motion, not their curve types.
+
+`onion_skin` draws what to look at: the pose at a time, ghosts of the poses before (warm) and after (cool) it every few frames, at keyed frames, or at given times (such as the key poses `analyze_motion` reports), and a dot per frame along the paths of the parts that travel farthest, so spacing and arcs show at a glance. Poses come from spine-core (constraints, physics, clipping) and are drawn with Pillow, so it needs Node but not the Spine editor. Blend modes are approximated and tint-black colours are not drawn.
+
+A review loop, in plain language to Claude: *"Analyze the deal animation, show me an onion skin at each rank 2 and 3 finding, fix the keys, and analyze again until it is clean."*
 
 ### Draw order and draw order folders
 
@@ -172,7 +191,9 @@ src/
   preview.py           Spine Web Player page
   spine_cli.py         Spine editor CLI: import, export, project info
   editor_quirks.py     what the Spine editor's import loses, recorded and put back in exports
-  runtime/             spine-core runtime check, pose comparison and binary restore (Node scripts + wrapper)
+  runtime/             spine-core runtime check, pose comparison, motion sampling and rendering, binary restore (Node scripts + wrapper)
+  motion.py            analyze_motion: samples the animations, then spine/motion.py's findings
+  onion.py             onion_skin: ghosts and spacing trails drawn from spine-core's triangles
   ops/                 edits as pure functions: animation, rig, constraints, attachments, meshes, shapes, skins
   psd/tags.py          Spine Import PSD tags: each attachment layer's slot, skin, placeholder, path, bone
   psd/render.py        a tagged layer's image: overlays, trim, scale, rotate, padding
@@ -190,6 +211,7 @@ src/
   spine/inspect.py     skeleton summary for inspect_skeleton
   spine/animation.py   easing shorthand -> Spine animation JSON
   spine/presets.py     idle, walk, wave, jump
+  spine/motion.py      motion measurements and ranked findings
   atlas/packer.py      rectpack bin packing
   atlas/writer.py      .atlas text + composite PNG
 reference/             SkeletonJson-4.2.java, SkeletonJson-4.3.java (spine-runtimes), spineboy.atlas

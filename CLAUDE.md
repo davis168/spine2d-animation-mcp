@@ -58,6 +58,11 @@ uv run spine2d-mcp                        # run the server on stdio
 - `runtime/__init__.py` installs a spine-core release per format version (or the game's installed release) and runs `runtime_check.mjs`. That script plays every animation in every skin, and in `--poses` mode dumps world transforms for `compare_poses`.
 - `Animation.apply` changed in spine-core 4.3.6 (a boolean `fromSetup` became `MixFrom`); the harness handles both.
 
+**Motion review** (`analyze_motion`, `onion_skin`) is read-only and needs Node, not the editor.
+- `runtime/motion.mjs` plays animations through spine-core's AnimationState with constraints and physics. In "sample" mode it records each bone's world transform and each visible slot's attachment centre and four tracked vertices at 60 Hz; in "render" mode, each drawn slot's clipped triangles.
+- `spine/motion.py` turns samples into ranked findings. It judges screen motion (so baked, key-per-frame animations are judged fairly) and reads keys only for curve-level findings. Thresholds are module constants scaled to the skeleton's size; tune them against real rigs (the navy dealer) before trusting a new one.
+- `onion.py` draws the triangles with Pillow; atlas pages are kept premultiplied (`RGBa`) because Pillow otherwise converts the whole page on every triangle.
+
 **The Spine editor** (`spine_cli.py`) runs the CLI with `-u <release>`. `editor_for` picks one release per file: explicit, else `$SPINE_EDITOR_VERSION`, else the newest stable release in the launcher's `updates` folder. `spine_import` imports a temporary copy whose header names the editor's own release. If the skeleton has sliders, the copy also lists animations in the editor's own sort order (`editor_animation_order`), because the 4.3 editor stores a slider's animation as an index.
 
 **`editor_quirks.py`** covers what the editor's import loses (4.3 clip `convex`/`inverse`, nested draw order folder keys).
