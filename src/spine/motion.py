@@ -171,6 +171,16 @@ def _animation(ctx, name, anim, frames, start, duration, loop, last=None):
                 f"the velocity changes by {100 * share:.0f}% of the move's peak in one frame while moving", evidence,
                 "carry the speed through the key: a bezier instead of a linear key mid-move, or spread the "
                 "direction change over 2-4 frames")
+        elif kind in ("hitch at a swap", "jump at a swap"):
+            near = _drawing_changes(frames)[max(a - 1, 0):b + 3]
+            swapping = [s for k, s in enumerate(ctx["slot_names"]) if near[:, k].any()]
+            evidence["swaps"] = swapping
+            add(kind, 4, "5 follow-through", f"{parts} {'jerk' if kind.startswith('hitch') else 'jump'}"
+                f"{'s' if one else ''} at {at(a)} s, on the frame {', '.join(swapping)} change"
+                f"{'s' if len(swapping) == 1 else ''} drawing: expected when a part follows each drawing's "
+                f"length; look at that frame with onion_skin (times [{at(a)}])", evidence,
+                "if it reads as a pop at speed, swap on a frame where the part moves least, or use drawings whose "
+                "lengths differ less")
         elif kind == "linear spacing":
             add(kind, 3, "6 slow in / slow out", f"{parts} move{'s' if one else ''} at a constant speed from "
                 f"{at(a)} to {at(b)} s and start or stop dead", evidence,
@@ -270,10 +280,38 @@ def _stretches(ctx, frames, lo):
     return out
 
 
+def _drawing_changes(frames) -> np.ndarray:
+    """Per sample and slot: the slot shows another attachment than on the sample before."""
+    att = frames["att"]
+    changed = np.zeros(att.shape, dtype=bool)
+    changed[1:] = (att[1:] != att[:-1]) & (att[1:] >= 0) & (att[:-1] >= 0)
+    return changed
+
+
+def _swaps_above(ctx, frames) -> np.ndarray:
+    """Per sample and slot: a slot on this slot's bone or an ancestor changes its drawing there.
+    With per-pose drawings (a foreshortened forearm drawn once per pose) the child bone is keyed to
+    each drawing's length, so what hangs below jumps on those frames by design."""
+    changed = _drawing_changes(frames)
+    by_bone: dict[int, np.ndarray] = {}
+    for k, bone in enumerate(ctx["slot_bone"]):
+        by_bone[bone] = by_bone.get(bone, np.zeros(len(changed), dtype=bool)) | changed[:, k]
+    out = np.zeros(changed.shape, dtype=bool)
+    for k, bone in enumerate(ctx["slot_bone"]):
+        j = bone
+        while j >= 0:
+            if j in by_bone:
+                out[:, k] |= by_bone[j]
+            j = ctx["parents"][j]
+    return out
+
+
 def _part_events(ctx, frames, v, speed, lo, end):
     """Per visible part: (kind, first sample, last sample, slot, measure) for teleports, hitches,
-    abrupt starts and stops, linear spacing and straight paths."""
+    abrupt starts and stops, linear spacing and straight paths. A teleport or hitch on a frame where
+    the part's bone or an ancestor changes drawing is a "jump at a swap" or "hitch at a swap"."""
     size, rate, points = ctx["size"], ctx["rate"], frames["points"]
+    swaps = _swaps_above(ctx, frames)
     events = []
     for k, slot in enumerate(ctx["slot_names"]):
         part = speed[:, k]
@@ -285,13 +323,15 @@ def _part_events(ctx, frames, v, speed, lo, end):
             after = [jumps[j - 1] for j in range(i + 1, min(end, i + 3) + 1) if not np.isnan(part[j])]
             usual = max(float(np.median(before)) if before else 0.0, float(np.median(after)) if after else 0.0)
             if jumps[i - 1] > 3 * usual:  # bigger than the motion on both sides, not a fast start or stop
-                events.append(("teleport", i, i, slot, float(jumps[i - 1])))
+                kind = "jump at a swap" if swaps[max(i - 1, 0):i + 2, k].any() else "teleport"
+                events.append((kind, i, i, slot, float(jumps[i - 1])))
         for a, b, top in _moves(part, points[:, k], lo, end, size):
             for i in range(a, b):
                 if min(part[i], part[i + 1]) > 0.4 * top:
                     change = float(np.linalg.norm(v[i + 1, k] - v[i, k], axis=-1).mean())
                     if change > HITCH * top:
-                        events.append(("hitch", i, i, slot, change / top))
+                        kind = "hitch at a swap" if swaps[max(i - 1, 0):i + 3, k].any() else "hitch"
+                        events.append((kind, i, i, slot, change / top))
             before = float(np.nan_to_num(part[a - 1])) if a - 1 >= lo else None
             after = float(np.nan_to_num(part[b + 1])) if b + 1 <= end else None
             starts_dead = before is not None and before < STOPPED * top and part[a] > FAST * top

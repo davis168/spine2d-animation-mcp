@@ -62,6 +62,24 @@ def test_a_reversal_at_full_speed_is_a_hitch(imported43):
     assert not findings(report, "swing", "hitch")
 
 
+def test_a_jerk_on_a_drawing_swap_above_is_listed_apart(imported43):
+    """Per-pose drawings: the hand follows each forearm drawing, so it jerks when one is swapped in."""
+    path = str(imported43.project_path)
+    doc = d.load(path)
+    arm = d.find_skin(doc, "default")["attachments"]["arm_left"]
+    arm["arm_left_bent"] = {**arm["arm_left"], "path": arm["arm_left"].get("path", "arm_left")}
+    d.save(doc, path)
+    server.add_animation(path, "snap", timelines={
+        "bones": {"arm_left": rotate((0, 0), (0.2, 0), (0.6, 60), (1.0, 0), (1.4, 0))},
+        "slots": {"arm_left": {"attachment": [{"time": 0, "name": "arm_left"}, {"time": 0.6, "name": "arm_left_bent"}]}}})
+    report = analyze_motion(path, ["snap"])
+    assert not findings(report, "snap", "hitch")
+    swap, = findings(report, "snap", "hitch at a swap")
+    assert swap["rank"] == 4 and swap["evidence"]["swaps"] == ["arm_left"]
+    assert "hand_left" in swap["evidence"]["slots"] and swap["evidence"]["time"] == pytest.approx(0.6, abs=0.04)
+    assert "onion_skin" in swap["what"]
+
+
 def test_straight_paths_and_arcs(imported43):
     path = animate(imported43, "slide", {"hand_left": {"translate": [
         {"time": 0, "x": 0, "y": 0}, {"time": 0.2, "x": 0, "y": 0, "ease": "inout"},

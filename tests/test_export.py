@@ -51,14 +51,35 @@ def test_the_shown_copy_combines_the_skins(tmp_path):
     copy = _shown_copy(_skinned(), tmp_path, ["blue", "red", "hats"])
     assert [s["name"] for s in copy["skins"]] == ["default", SHOWN_SKIN]
     shown = copy["skins"][1]
-    assert shown["attachments"]["head"]["face"]["name"] == "red/face"  # later skins win a placeholder
-    assert shown["attachments"]["head"]["face"]["skin"] == SHOWN_SKIN  # its source mesh came along
+    face = shown["attachments"]["head"]["face"]
+    blue = _skinned()["skins"][1]["attachments"]["head"]["face"]
+    # red's linked mesh took its own source's placeholder, so it is written out as a full mesh
+    assert face["name"] == "red/face" and face["type"] == "mesh" and "source" not in face and "skin" not in face
+    assert all(face[k] == blue[k] for k in ("uvs", "triangles", "vertices", "hull"))
+    assert (face["width"], face["height"]) == (1, 1)
     assert shown["attachments"]["top"] == {"cap": {"width": 4, "height": 4}} and shown["bones"] == ["hat"]
+    assert _shown_copy(_skinned(), tmp_path, ["red", "blue"])["skins"][1]["attachments"]["head"]["face"] == blue
     assert copy["skeleton"]["images"] == str((tmp_path / "images").resolve()) + "/"
     with pytest.raises(SpineCliError, match="no skin green"):
         _shown_copy(_skinned(), tmp_path, ["green"])
     with pytest.raises(SpineCliError, match="uses a mesh in skin 'blue': add it to skins"):
         _shown_copy(_skinned(), tmp_path, ["red"])
+
+
+def test_animation_keys_follow_the_attachment_that_shows(tmp_path):
+    doc = _skinned()
+    doc["skins"].append({"name": "green", "attachments": {"head": {"face": {
+        "name": "green/face", "type": "linkedmesh", "skin": "blue", "source": "face", "timelines": False}}}})
+    bend = {"deform": [{"time": 0}, {"time": 1, "vertices": [1, 1]}]}
+    doc["animations"] = {"bend": {"attachments": {"blue": {"head": {"face": bend}},
+                                                  "hats": {"top": {"cap": {"sequence": [{"time": 0}]}}}}}}
+    # red inherits blue's deform keys, so they play on its unlinked copy
+    keyed = _shown_copy(doc, tmp_path, ["blue", "red"])["animations"]["bend"]["attachments"]
+    assert keyed == {SHOWN_SKIN: {"head": {"face": bend}}}
+    # green does not inherit them, and keys for a skin left out go too
+    assert "attachments" not in _shown_copy(doc, tmp_path, ["blue", "green"])["animations"]["bend"]
+    keyed = _shown_copy(doc, tmp_path, ["hats", "blue"])["animations"]["bend"]["attachments"]
+    assert keyed == {SHOWN_SKIN: {"head": {"face": bend}, "top": {"cap": {"sequence": [{"time": 0}]}}}}
 
 
 def test_missing_images_are_named(tmp_path):

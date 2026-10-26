@@ -408,6 +408,139 @@ def test_reweighting_respects_linked_meshes_deform_keys(doc43):
         meshes.set_weights(doc43, "arm_left", "arm_left", bones=["arm_left", "hand_left"])
 
 
+def _two_bone_arm(doc):
+    """arm_left as a weighted mesh whose vertices follow arm_left and hand_left."""
+    meshes.add_mesh(doc, "arm_left", "arm_left", grid_size=(1, 4))
+    meshes.set_weights(doc, "arm_left", "arm_left", bones=["arm_left", "hand_left"])
+    mesh = _att(doc, "arm_left", "arm_left")
+    records, i = [], 0
+    while i < len(mesh["vertices"]):
+        n = int(mesh["vertices"][i])
+        records.append(n)
+        i += 1 + 4 * n
+    return mesh, records
+
+
+def _deformed(doc, slot, att, deltas):
+    """World points with a deform key's deltas added, one pair per influence."""
+    moved, vertices, i, k = dict(att), list(att["vertices"]), 0, 0
+    while i < len(vertices):
+        n = int(vertices[i])
+        for j in range(n):
+            vertices[i + 2 + 4 * j] += deltas[2 * k]
+            vertices[i + 3 + 4 * j] += deltas[2 * k + 1]
+            k += 1
+        i += 1 + 4 * n
+    moved["vertices"] = vertices
+    return meshes.world_points(doc, slot, moved)
+
+
+def test_mix_and_match_rigs_and_events_at_one_time_are_clean(doc43):
+    """A rig whose parts all live in named skins, and two events firing at one moment (logic and
+    sound), are both valid; the same event twice at one time is not."""
+    skin = d.find_skin(doc43, "default")
+    skin["name"] = "dealer/one"
+    doc43["events"] = {"landed": {}, "sfx/land": {}}
+    doc43["animations"] = {"deal": {"events": [{"time": 1.3, "name": "landed"}, {"time": 1.3, "name": "sfx/land"}]}}
+    assert check(doc43) == []
+    doc43["animations"]["deal"]["events"].append({"time": 1.3, "name": "landed"})
+    twice, = check(doc43)
+    assert twice.level == "warning" and "two keys at time 1.3 for 'landed'" in twice.message
+
+
+def test_a_region_turned_into_a_mesh_keeps_its_image(doc43):
+    head = _att(doc43, "head", "head")
+    head["name"] = "dealer/navy/head"  # the PSD importer names the image this way
+    meshes.add_mesh(doc43, "head", "head", grid_size=(2, 2))
+    mesh = _att(doc43, "head", "head")
+    assert mesh["type"] == "mesh" and mesh["name"] == "dealer/navy/head" and "path" not in mesh
+    region = _att(doc43, "arm_left", "arm_left")
+    region["path"] = "arms/left"
+    meshes.add_mesh(doc43, "arm_left", "arm_left", grid_size=(1, 2))
+    assert _att(doc43, "arm_left", "arm_left")["path"] == "arms/left"
+
+
+def test_a_weighted_deform_key_holds_a_delta_per_influence(doc43):
+    mesh, counts = _two_bone_arm(doc43)
+    influences = sum(counts)
+    assert influences > len(mesh["uvs"]) // 2  # some vertices follow both bones
+    add_animation(doc43, "bend", timelines={"attachments": {"default": {"arm_left": {"arm_left": {
+        "deform": [{"time": 0}, {"time": 0.5, "vertices": [1.0] * (2 * influences)}]}}}}})
+    assert [f for f in check(doc43) if "deform" in f.path] == []
+    keys = doc43["animations"]["bend"]["attachments"]["default"]["arm_left"]["arm_left"]["deform"]
+    keys[1]["vertices"].append(1.0)
+    assert any("exceeds" in f.message for f in check(doc43) if "deform" in f.path)
+
+
+def test_mixed_bone_order_is_reported_and_reordering_keeps_every_vertex(doc43):
+    mesh, counts = _two_bone_arm(doc43)
+    meshes.add_linked_mesh(doc43, "arm_left", "arm2", "arm_left", timelines=False)
+    influences = sum(counts)
+    deltas = [float(k % 7) for k in range(2 * influences)]
+    add_animation(doc43, "bend", timelines={"attachments": {"default": {"arm_left": {
+        "arm_left": {"deform": [{"time": 0, "offset": 2, "vertices": deltas[2:]}]},
+        "arm2": {"deform": [{"time": 0, "vertices": deltas}]}}}}})
+    assert check(doc43) == []
+    first = next(v for v, n in enumerate(counts) if n == 2)  # swap one vertex's two bones
+    i = sum(1 + 4 * n for n in counts[:first])
+    v = mesh["vertices"]
+    v[i + 1:i + 9] = v[i + 5:i + 9] + v[i + 1:i + 5]
+    k = 2 * sum(counts[:first])
+    swapped = deltas[:k] + deltas[k + 2:k + 4] + deltas[k:k + 2] + deltas[k + 4:]
+    for name, d_ in (("arm_left", swapped[2:]), ("arm2", swapped)):
+        doc43["animations"]["bend"]["attachments"]["default"]["arm_left"][name]["deform"][0]["vertices"] = d_
+    before_setup = meshes.world_points(doc43, "arm_left", mesh)
+    before_bent = _deformed(doc43, "arm_left", mesh, swapped)
+    found = [f for f in check(doc43) if "both orders" in f.message]
+    assert found and found[0].level == "error" and "spine_import" in found[0].message
+
+    assert meshes.order_influences(doc43) == ["default/arm_left/arm_left"]
+    assert check(doc43) == []
+    assert _close(meshes.world_points(doc43, "arm_left", mesh), before_setup)
+    keys = doc43["animations"]["bend"]["attachments"]["default"]["arm_left"]
+
+    def full(key):
+        out = [0.0] * (2 * influences)
+        out[key.get("offset", 0):key.get("offset", 0) + len(key["vertices"])] = key["vertices"]
+        return out
+
+    assert full(keys["arm2"]["deform"][0]) == deltas  # the linked mesh's key moved too
+    own = [0.0, 0.0] + swapped[2:]  # its key as written, in the swapped order
+    assert full(keys["arm_left"]["deform"][0]) == own[:k] + own[k + 2:k + 4] + own[k:k + 2] + own[k + 4:]
+    assert _close(_deformed(doc43, "arm_left", mesh, deltas), before_bent)
+    assert meshes.order_influences(doc43) == []
+
+
+@needs_spine
+def test_spine_import_replaces_a_project_only_when_asked(imported43):
+    path = str(imported43.project_path)
+    first = server.spine_import(path)
+    assert first["ok"], first
+    with pytest.raises(spine_cli.SpineCliError, match="already holds skeleton .* replace=true"):
+        server.spine_import(path)
+    again = server.spine_import(path, replace=True)
+    assert again["ok"] and again["replaced"], again
+    held = spine_cli.project_info(first["spine_project"]).get("skeletons")
+    assert held == [imported43.project_path.stem]  # replaced, not a second skeleton beside it
+    assert not list(imported43.project_path.parent.glob(".*.replacing.spine"))
+
+
+@needs_spine
+def test_spine_import_gives_the_editor_bone_order(imported43):
+    path = str(imported43.project_path)
+    doc = d.load(path)
+    mesh, counts = _two_bone_arm(doc)
+    first = next(v for v, n in enumerate(counts) if n == 2)
+    i = sum(1 + 4 * n for n in counts[:first])
+    v = mesh["vertices"]
+    v[i + 1:i + 9] = v[i + 5:i + 9] + v[i + 1:i + 5]
+    d.save(doc, path)
+    result = server.spine_import(path)
+    assert result["ok"], result
+    assert any("bone order" in w for w in result.get("warnings", []))
+    assert d.load(path)["skins"] == doc["skins"]  # the JSON itself is unchanged
+
+
 def test_weights_need_normal_inherit(doc43):
     meshes.add_mesh(doc43, "arm_left", "arm_left", grid_size=(1, 1))
     rig.set_bone(doc43, "arm_left", inherit="noScale")

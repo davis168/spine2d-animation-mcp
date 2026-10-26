@@ -975,6 +975,7 @@ def spine_import(
     spine_project: str | None = None,
     skeleton_name: str | None = None,
     editor_version: str | None = None,
+    replace: bool = False,
 ) -> dict:
     """Import a skeleton JSON into a .spine project with the Spine editor's
     CLI (needs Spine installed; set SPINE_EXECUTABLE if it is not in the
@@ -987,15 +988,19 @@ def spine_import(
     binary exports, and physics rotate/scaleX/shearX on a bone without length
     (give the bone a length). A skin attachment under a name the default skin
     also has in that slot is refused before the editor runs (it would not
-    import); edit_skin move_to_skins fixes it.
+    import); edit_skin move_to_skins fixes it. Weighted vertices that list
+    bones in different orders, which the editor refuses, reach it in bone
+    order. A project that already holds a skeleton of this name is refused
+    (the editor would add "<name>2" beside it) unless replace is true.
 
     Args:
         project_path: Absolute path to the skeleton .json.
         spine_project: .spine file to create or import into; default next to the JSON.
         skeleton_name: Name of the imported skeleton; default the JSON's name.
         editor_version: A specific editor release of the file's format version.
+        replace: Replace an existing project that holds only this skeleton.
     """
-    return spine_cli.spine_import(project_path, spine_project, skeleton_name, editor_version)
+    return spine_cli.spine_import(project_path, spine_project, skeleton_name, editor_version, replace)
 
 
 @mcp.tool()

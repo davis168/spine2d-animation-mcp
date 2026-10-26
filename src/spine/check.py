@@ -435,8 +435,8 @@ class _Checker:
                        "Spine editor refuses to import it (\"Multiple attachments have the same name\"), since a "
                        "name a skin uses is a skin placeholder, which the default skin cannot also hold; move it "
                        "out of the default skin into skins (edit_skin move_to_skins) or use another name here")
-        if skins and "default" not in self.skin_names:
-            self.warn("skins", "no 'default' skin: slots show nothing until a skin is set at runtime")
+        # No default skin is valid (mix and match: every part in named skins, composed with addSkin);
+        # a setup attachment no skin holds is an error of its own.
         listed = {n for skin in skins if isinstance(skin, dict) for key in ("bones", *d.CONSTRAINT_KINDS)
                   for n in skin.get(key) or [] if isinstance(n, str)}
         for i, bone in enumerate(d.bones(self.doc)):
@@ -564,13 +564,14 @@ class _Checker:
             return  # unweighted: x, y per vertex in the slot bone's space
         bone_count = len(d.bones(self.doc))
         i, seen = 0, 0
+        after: dict[int, set[int]] = {}  # bone index -> bones listed after it on some vertex
         while i < len(vertices) and seen < count:
             n = vertices[i]  # the editor writes counts and bone indices as floats (2.0) in 4.3
             if not _whole(n) or n < 1:
                 self.error(path, f"weighted vertex {seen}: bad influence count {n!r}")
                 return
             n = int(n)
-            total = 0.0
+            total, listed = 0.0, []
             for j in range(n):
                 k = i + 1 + j * 4
                 if k + 3 >= len(vertices):
@@ -579,6 +580,10 @@ class _Checker:
                 bone_index, weight = vertices[k], vertices[k + 3]
                 if not _whole(bone_index) or not 0 <= bone_index < bone_count:
                     self.error(path, f"weighted vertex {seen}: bone index {bone_index!r} out of range")
+                else:
+                    for earlier in listed:
+                        after.setdefault(earlier, set()).add(int(bone_index))
+                    listed.append(int(bone_index))
                 total += weight if _num(weight) else 0
             if abs(total - 1) > 0.01:
                 self.warn(path, f"weighted vertex {seen}: weights sum to {total:.3f}, not 1")
@@ -586,6 +591,12 @@ class _Checker:
             seen += 1
         if seen != count or i != len(vertices):
             self.error(path, f"vertices hold {seen} weighted vertices, expected {count}")
+        clash = next(((a, b) for a, later in after.items() for b in later if a in after.get(b, ())), None)
+        if clash:
+            names = [b.get("name") for b in d.bones(self.doc)]
+            self.error(path, f"vertices list bones {names[clash[0]]!r} and {names[clash[1]]!r} in both orders: the "
+                             "Spine editor refuses the file (\"Index -2 out of bounds\"); the runtimes do not mind. "
+                             "spine_import gives the editor a copy in bone order")
 
     def slot_setup_attachments(self) -> None:
         for slot in d.slots(self.doc):
@@ -745,7 +756,7 @@ class _Checker:
         self.draw_order(f"{path}.drawOrder", anim.get("drawOrder"), self.slot_names)
         self.folder_keys(path, anim.get("drawOrderFolder"))
         events = anim.get("events")
-        if events is not None and self.keys(f"{path}.events", events):
+        if events is not None and self.keys(f"{path}.events", events, by="name"):
             for i, k in enumerate(events):
                 if k.get("name") not in self.event_names:
                     self.error(f"{path}.events[{i}]", f"event {k.get('name')!r} not defined in the root 'events'")
@@ -879,11 +890,12 @@ class _Checker:
 
     # ── keys and curves ──────────────────────────────────────────────────────
 
-    def keys(self, path: str, keys) -> bool:
+    def keys(self, path: str, keys, by: str | None = None) -> bool:
+        """Times in order. With `by` (events: "name"), keys may share a time when that field differs."""
         if not isinstance(keys, list) or not all(isinstance(k, dict) for k in keys):
             self.error(path, "must be a list of key objects")
             return False
-        last = None
+        last, here = None, set()
         for i, k in enumerate(keys):
             t = k.get("time", 0)
             if not _num(t) or t < 0:
@@ -891,8 +903,9 @@ class _Checker:
                 continue
             if last is not None and t < last:
                 self.error(f"{path}[{i}].time", f"time {t} goes back from {last}")
-            elif last is not None and t == last:
-                self.warn(f"{path}[{i}].time", f"two keys at time {t}")
+            elif last is not None and t == last and (by is None or k.get(by) in here):
+                self.warn(f"{path}[{i}].time", f"two keys at time {t}" + (f" for {k.get(by)!r}" if by else ""))
+            here = (here if t == last else set()) | {k.get(by)}
             last = t
         return True
 
@@ -948,11 +961,23 @@ def _whole(value) -> bool:
 
 
 def _deform_length(att: dict) -> int | None:
+    """The deform key length the reader allocates: 2 per vertex, or 2 per bone
+    influence when the vertices are weighted (each delta is in its bone's space)."""
     uvs = att.get("uvs")
-    if isinstance(uvs, list):
-        return len(uvs)
-    count = att.get("vertexCount")
-    return count * 2 if isinstance(count, int) else None
+    count = len(uvs) // 2 if isinstance(uvs, list) else att.get("vertexCount")
+    if not isinstance(count, int):
+        return None
+    vertices = att.get("vertices")
+    if not isinstance(vertices, list) or len(vertices) == count * 2:
+        return count * 2
+    i = influences = 0
+    for _ in range(count):
+        if i >= len(vertices) or not _whole(vertices[i]):
+            return None
+        n = int(vertices[i])
+        influences += n
+        i += 1 + 4 * n
+    return influences * 2
 
 
 def check(doc: dict, loops: list[str] | None = None) -> list[Finding]:
