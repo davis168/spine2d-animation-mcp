@@ -109,6 +109,23 @@ def default_skin_clashes(doc: dict) -> list[tuple[str, str, str]]:
             for slot, names in _skin_keys(skin).items() for name in sorted(names & default.get(slot, set()))]
 
 
+def display_skins(doc: dict) -> list[str]:
+    """The skins that show the setup pose: for each slot whose setup attachment
+    is not in the default skin, the first skin holding it."""
+    default = find_skin(doc, "default") or {}
+    wanted = []
+    for slot in slots(doc):
+        name = slot.get("attachment")
+        if not name or name in ((default.get("attachments") or {}).get(slot.get("name")) or {}):
+            continue
+        for skin in skins(doc):
+            if skin.get("name") != "default" and name in ((skin.get("attachments") or {}).get(slot.get("name")) or {}):
+                if skin["name"] not in wanted:
+                    wanted.append(skin["name"])
+                break
+    return wanted
+
+
 def starting_skin(doc: dict) -> str | None:
     """The skin to show the skeleton in when slots' setup attachments are not
     in the default skin (they are skin placeholders): the skin holding the

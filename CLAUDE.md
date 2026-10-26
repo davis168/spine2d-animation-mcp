@@ -75,6 +75,7 @@ These were found by round trips through real editors (4.3.00–4.3.26 and 4.2.43
 - A named skin must not hold an attachment under a key the default skin also has in that slot; the editor refuses the file. Use `edit_skin` `move_to_skins` (skin placeholders) instead.
 - Physics `rotate`/`scaleX`/`shearX` need a bone with length; the editor drops them otherwise. `add_constraint` refuses them on zero-length bones, which PSD-imported bones are.
 - Draw order folders are slot-name prefixes (`arms/hand_left`) kept contiguous in setup order. `drawOrderFolder` is an array of `{slots, keys}`, with `slots` listing every slot of the folder in setup order. The editor keeps keys only for top-level folders.
+- PNG/GIF export renders one "current" skin (with several, the alphabetically first non-default one), and a named skin only beside a default skin. `spine_export` renders a JSON copy with the shown skins merged into skin `shown` and an empty default skin. Frame files replace `/` in names with `-`.
 - Re-check a new editor release with a round trip (import → JSON/binary export → compare in spine-core) before trusting a changelog line.
 
 ## Tests

@@ -27,8 +27,6 @@ import warnings
 
 import numpy as np
 
-from . import document as d
-
 HOLD = 0.04  # body speed below this share of its peak: holding a pose
 MOVING = 0.10  # a part moving: above this share of its own peak speed
 MIN_TRAVEL = 0.005  # a move counts when its farthest point travels 0.5% of the skeleton's size
@@ -46,23 +44,6 @@ MAX_PER_KIND = 4  # findings of one kind per animation; the rest are counted
 
 _LEFT_RIGHT = [(r"left", "right"), (r"Left", "Right"), (r"(?<![a-z])l(?![a-z])", "r"),
                (r"(?<![a-zA-Z])L(?![a-zA-Z])", "R")]
-
-
-def display_skins(doc: dict) -> list[str]:
-    """The skins that show the setup pose: for each slot whose setup attachment
-    is not in the default skin, the first skin holding it."""
-    default = d.find_skin(doc, "default") or {}
-    wanted = []
-    for slot in d.slots(doc):
-        name = slot.get("attachment")
-        if not name or name in ((default.get("attachments") or {}).get(slot.get("name")) or {}):
-            continue
-        for skin in d.skins(doc):
-            if skin.get("name") != "default" and name in ((skin.get("attachments") or {}).get(slot.get("name")) or {}):
-                if skin["name"] not in wanted:
-                    wanted.append(skin["name"])
-                break
-    return wanted
 
 
 def keyed_times(animation: dict) -> list[float]:
